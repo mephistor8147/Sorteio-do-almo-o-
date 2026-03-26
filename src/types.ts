@@ -22,5 +22,5 @@ export interface AppConfig {
 export interface AdminUser {
   id: string;
   username: string;
-  password?: string; // In a real app, this would be hashed and on the server
+  password?: string;
 }

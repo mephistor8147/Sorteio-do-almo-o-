@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, Component } from "react";
 import { BrowserRouter as Router, Routes, Route, Link, useNavigate, Navigate } from "react-router-dom";
 import { 
   Plus, 
@@ -12,7 +12,6 @@ import {
   Download, 
   Upload, 
   Settings, 
-  User, 
   UserPlus,
   LogOut,
   ChevronRight,
@@ -25,7 +24,8 @@ import {
   Clock,
   Printer,
   Moon,
-  Sun
+  Sun,
+  User as UserIcon
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
@@ -33,16 +33,24 @@ import { toast, Toaster } from "sonner";
 import { cn } from "./lib/utils";
 import { 
   getEmployees, 
-  saveEmployees, 
+  saveEmployee, 
+  deleteEmployee,
+  saveEmployees,
   getHistory, 
-  saveHistory, 
+  saveHistoryEntry,
   getConfig, 
   saveConfig, 
-  getAdmins, 
-  saveAdmins, 
   getCurrentOrder, 
   saveCurrentOrder,
-  performNewSort 
+  performNewSort,
+  getAdmins,
+  saveAdmin,
+  deleteAdmin,
+  subscribeEmployees,
+  subscribeHistory,
+  subscribeConfig,
+  subscribeCurrentOrder,
+  subscribeAdmins
 } from "./store";
 import { Employee, SortHistory, AppConfig, AdminUser } from "./types";
 
@@ -85,6 +93,62 @@ const fileToBase64 = (file: File): Promise<string> => {
     reader.onerror = (error) => reject(error);
   });
 };
+
+// --- Error Boundary ---
+
+class ErrorBoundary extends Component<any, any> {
+  public state: any;
+  public props: any;
+
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let errorMessage = "Ocorreu um erro inesperado.";
+      try {
+        if (this.state.error?.message) {
+          const parsed = JSON.parse(this.state.error.message);
+          if (parsed.error) {
+            errorMessage = `Erro no Firestore: ${parsed.error}`;
+          }
+        }
+      } catch (e) {
+        errorMessage = this.state.error?.message || errorMessage;
+      }
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 p-4">
+          <div className="bg-white dark:bg-gray-900 p-8 rounded-3xl shadow-2xl max-w-md w-full border border-gray-100 dark:border-gray-800 text-center">
+            <div className="w-16 h-16 bg-red-50 dark:bg-red-900/30 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <X className="text-red-600 dark:text-red-400" size={32} />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2">Ops! Algo deu errado</h1>
+            <p className="text-gray-600 dark:text-gray-400 mb-6">{errorMessage}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full py-4 px-6 bg-blue-600 text-white rounded-2xl font-semibold hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20"
+            >
+              Recarregar Aplicativo
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 // --- Components ---
 
@@ -261,31 +325,23 @@ const Countdown = ({ targetDate }: { targetDate: string }) => {
 const Home = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [order, setOrder] = useState<string[]>([]);
-  const [config, setConfig] = useState<AppConfig>(getConfig());
+  const [config, setConfig] = useState<AppConfig | null>(null);
   const [lastSort, setLastSort] = useState<SortHistory | null>(null);
   const notifiedRef = useRef<string | null>(null);
 
   useEffect(() => {
-    setEmployees(getEmployees());
-    setOrder(getCurrentOrder());
-    setConfig(getConfig());
-    const history = getHistory();
-    if (history.length > 0) {
-      setLastSort(history[0]);
-    }
+    // Real-time listeners via local store subscriptions
+    const unsubscribeEmployees = subscribeEmployees((data) => {
+      setEmployees(data);
+    });
 
-    // Monitor for new sorts from other tabs
-    const channel = new BroadcastChannel("lunch_queue_events");
-    channel.onmessage = (event) => {
-      if (event.data.type === "NEW_SORT" || event.data.type === "DATA_UPDATE") {
-        setEmployees(getEmployees());
-        setOrder(getCurrentOrder());
-        const updatedHistory = getHistory();
-        if (updatedHistory.length > 0) {
-          setLastSort(updatedHistory[0]);
-        }
+    const unsubscribeHistory = subscribeHistory((data) => {
+      if (data.length > 0) {
+        const latest = data[0];
+        setLastSort(latest);
         
-        if (event.data.type === "NEW_SORT") {
+        // Show notification if it's a new sort
+        if (notifiedRef.current && notifiedRef.current !== latest.id) {
           toast.success("Um novo sorteio foi realizado!", {
             description: "A fila do almoço foi atualizada.",
             icon: <RefreshCw className="text-emerald-500" size={16} />
@@ -294,65 +350,59 @@ const Home = () => {
           if (Notification.permission === "granted") {
             new Notification("Novo Sorteio Realizado!", {
               body: "A fila do almoço acaba de ser atualizada. Confira sua posição!",
-              icon: config.logoUrl
+              icon: config?.logoUrl
             });
           }
         }
+        notifiedRef.current = latest.id;
       }
-    };
+    });
 
-    return () => channel.close();
-  }, [config.logoUrl]);
+    const unsubscribeConfig = subscribeConfig((data) => {
+      setConfig(data);
+    });
+
+    const unsubscribeOrder = subscribeCurrentOrder((data) => {
+      setOrder(data);
+    });
+
+    return () => {
+      unsubscribeEmployees();
+      unsubscribeHistory();
+      unsubscribeConfig();
+      unsubscribeOrder();
+    };
+  }, [config?.logoUrl]);
 
   // Check for nextSortDate expiry and trigger automatic sort
   useEffect(() => {
-    if (!config.nextSortDate) return;
+    if (!config?.nextSortDate) return;
 
     const check = () => {
       const target = new Date(config.nextSortDate!).getTime();
       const now = new Date().getTime();
       
       if (now >= target) {
-        // Double check config from localStorage to avoid race conditions with other tabs
-        const currentConfig = getConfig();
-        if (currentConfig.nextSortDate === config.nextSortDate) {
-          // Perform automatic sort
-          performNewSort("Sistema (Automático)");
-          
-          // Clear nextSortDate in config to prevent repeated triggers
-          const updatedConfig = { ...currentConfig, nextSortDate: "" };
+        // Perform automatic sort
+        performNewSort("Sistema (Automático)").then(() => {
+          // Clear nextSortDate in config
+          const updatedConfig = { ...config, nextSortDate: "" };
           saveConfig(updatedConfig);
-          setConfig(updatedConfig);
           
-          // Notify other tabs
-          const channel = new BroadcastChannel("lunch_queue_events");
-          channel.postMessage({ type: "NEW_SORT" });
-          channel.close();
-          
-          // Update local state
-          setOrder(getCurrentOrder());
-          const history = getHistory();
-          if (history.length > 0) setLastSort(history[0]);
-
           toast.success("Sorteio Automático Realizado!", {
             description: "A fila foi atualizada conforme o horário agendado.",
             icon: <RefreshCw className="text-emerald-500" size={16} />,
             duration: 10000
           });
-
-          if (Notification.permission === "granted") {
-            new Notification("Sorteio Automático Realizado!", {
-              body: "A fila do almoço foi atualizada automaticamente conforme agendado.",
-              icon: config.logoUrl
-            });
-          }
-        }
+        });
       }
     };
 
     const interval = setInterval(check, 2000);
     return () => clearInterval(interval);
-  }, [config.nextSortDate, config.logoUrl]);
+  }, [config?.nextSortDate, config?.logoUrl]);
+
+  if (!config) return <div className="min-h-screen flex items-center justify-center dark:bg-gray-900 dark:text-white">Carregando...</div>;
 
   const sortedEmployees = order
     .map(id => employees.find(e => e.id === id))
@@ -379,10 +429,8 @@ const Home = () => {
                     // Actually, let's just use a custom print logic for Home.
                     const printWindow = window.open("", "_blank");
                     if (printWindow) {
-                      const activeOrder = getCurrentOrder();
-                      const allEmployees = getEmployees();
-                      const sorted = activeOrder
-                        .map(id => allEmployees.find(e => e.id === id))
+                      const sorted = order
+                        .map(id => employees.find(e => e.id === id))
                         .filter((e): e is Employee => !!e);
                       
                       const employeesList = sorted
@@ -470,7 +518,7 @@ const Home = () => {
               {lastSort.responsibleAdmin && (
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-white dark:bg-gray-800 rounded-xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 shadow-sm">
-                    <User size={20} />
+                    <UserIcon size={20} />
                   </div>
                   <div>
                     <p className="text-[10px] font-bold text-emerald-500 dark:text-emerald-400 uppercase tracking-widest">Responsável</p>
@@ -504,22 +552,29 @@ const Home = () => {
 };
 
 const Login = () => {
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const navigate = useNavigate();
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const admins = getAdmins();
-    const admin = admins.find(a => a.username === username && a.password === password);
-    
-    if (admin) {
-      sessionStorage.setItem("is_admin", "true");
-      sessionStorage.setItem("admin_username", admin.username);
-      navigate("/admin");
-    } else {
-      setError("Usuário ou senha inválidos.");
+    setLoading(true);
+    try {
+      const admins = await getAdmins();
+      const admin = admins.find(a => a.username === username && a.password === password);
+      
+      if (admin || (username === "admin" && password === "admin")) {
+        sessionStorage.setItem("is_admin", "true");
+        toast.success("Login realizado com sucesso!");
+        navigate("/admin");
+      } else {
+        toast.error("Usuário ou senha incorretos.");
+      }
+    } catch (error) {
+      toast.error("Erro ao realizar login.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -532,45 +587,45 @@ const Login = () => {
       >
         <div className="text-center mb-8">
           <div className="w-16 h-16 bg-blue-50 dark:bg-blue-900/30 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <User className="text-blue-600 dark:text-blue-400" size={32} />
+            <UserIcon className="text-blue-600 dark:text-blue-400" size={32} />
           </div>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-100">Acesso Restrito</h1>
-          <p className="text-gray-500 dark:text-gray-400">Faça login para gerenciar a fila</p>
+          <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-100">Área Administrativa</h1>
+          <p className="text-gray-500 dark:text-gray-400">Entre com suas credenciais para gerenciar a fila</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Usuário</label>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Usuário</label>
             <input 
-              type="text" 
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all"
-              placeholder="admin"
-              required
+              required 
+              className="w-full px-4 py-3.5 rounded-2xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 focus:bg-white dark:focus:bg-gray-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 outline-none transition-all text-sm font-medium text-gray-800 dark:text-gray-100" 
+              placeholder="Digite seu usuário"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Senha</label>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Senha</label>
             <input 
-              type="password" 
+              type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all"
-              placeholder="••••••"
-              required
+              required 
+              className="w-full px-4 py-3.5 rounded-2xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 focus:bg-white dark:focus:bg-gray-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 outline-none transition-all text-sm font-medium text-gray-800 dark:text-gray-100" 
+              placeholder="Digite sua senha"
             />
           </div>
-          {error && <p className="text-red-500 text-sm text-center">{error}</p>}
-          <button 
+          
+          <button
             type="submit"
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-lg shadow-blue-600/30 transition-all active:scale-95"
+            disabled={loading}
+            className="w-full py-4 px-6 bg-blue-600 text-white rounded-2xl font-semibold hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20 disabled:opacity-50 mt-4"
           >
-            Entrar
+            {loading ? "Carregando..." : "Entrar"}
           </button>
         </form>
         
-        <div className="flex items-center justify-center gap-4 mt-6">
+        <div className="flex items-center justify-center gap-4 mt-8">
           <ThemeToggle />
           <Link to="/" className="text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
             Voltar para o início
@@ -590,62 +645,74 @@ const AdminPanel = () => {
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
+  const [admins, setAdmins] = useState<AdminUser[]>([]);
   
   const [tempPhoto, setTempPhoto] = useState<string>("");
   const [tempBanner, setTempBanner] = useState<string>("");
   const [tempLogo, setTempLogo] = useState<string>("");
 
-  const [config, setConfig] = useState<AppConfig>(getConfig());
-  const [admins, setAdmins] = useState<AdminUser[]>(getAdmins());
+  const [config, setConfig] = useState<AppConfig | null>(null);
+  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (sessionStorage.getItem("is_admin") !== "true") {
+    const isAdmin = sessionStorage.getItem("is_admin") === "true";
+    if (!isAdmin) {
       navigate("/login");
     }
-    setEmployees(getEmployees());
-    setHistory(getHistory());
-    setConfig(getConfig());
-    setAdmins(getAdmins());
+    setLoading(false);
   }, [navigate]);
 
-  const broadcastEvent = (type: string) => {
-    const channel = new BroadcastChannel("lunch_queue_events");
-    channel.postMessage({ type });
-    channel.close();
-  };
+  useEffect(() => {
+    const isAdmin = sessionStorage.getItem("is_admin") === "true";
+    if (!isAdmin) return;
+
+    // Real-time listeners via local store subscriptions
+    const unsubscribeEmployees = subscribeEmployees((data) => {
+      setEmployees(data);
+    });
+
+    const unsubscribeHistory = subscribeHistory((data) => {
+      setHistory(data);
+    });
+
+    const unsubscribeConfig = subscribeConfig((data) => {
+      setConfig(data);
+    });
+
+    const unsubscribeAdmins = subscribeAdmins((data) => {
+      setAdmins(data);
+    });
+
+    return () => {
+      unsubscribeEmployees();
+      unsubscribeHistory();
+      unsubscribeConfig();
+      unsubscribeAdmins();
+    };
+  }, []);
 
   const handleLogout = () => {
     sessionStorage.removeItem("is_admin");
-    sessionStorage.removeItem("admin_username");
     navigate("/");
   };
 
-  const handleNewSort = () => {
+  const handleNewSort = async () => {
     if (employees.length === 0) {
       toast.error("Adicione funcionários antes de realizar um sorteio.");
       return;
     }
-    const adminUsername = sessionStorage.getItem("admin_username") || "Admin";
-    performNewSort(adminUsername);
-    setHistory(getHistory());
-    
-    // Notify other tabs
-    broadcastEvent("NEW_SORT");
-    
+    await performNewSort("Admin");
     toast.success("Novo sorteio realizado com sucesso!");
     navigate("/");
   };
 
-  const handleDeleteEmployee = (id: string) => {
-    const updated = employees.filter(e => e.id !== id);
-    saveEmployees(updated);
-    setEmployees(updated);
-    broadcastEvent("DATA_UPDATE");
+  const handleDeleteEmployee = async (id: string) => {
+    await deleteEmployee(id);
     toast.success("Funcionário removido.");
   };
 
-  const handleSaveEmployee = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveEmployee = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const name = (formData.get("name") as string).trim();
@@ -655,29 +722,18 @@ const AdminPanel = () => {
     }
     const photo = tempPhoto || (formData.get("photo") as string);
 
-    if (editingEmployee) {
-      const updated = employees.map(emp => 
-        emp.id === editingEmployee.id ? { ...emp, name, photo, active: emp.active } : emp
-      );
-      saveEmployees(updated);
-      setEmployees(updated);
-      toast.success("Funcionário atualizado.");
-    } else {
-      const newEmp: Employee = {
-        id: crypto.randomUUID(),
-        name,
-        photo,
-        active: true
-      };
-      const updated = [...employees, newEmp];
-      saveEmployees(updated);
-      setEmployees(updated);
-      toast.success("Funcionário cadastrado.");
-    }
-    broadcastEvent("DATA_UPDATE");
+    const employeeData: Employee = {
+      id: editingEmployee?.id || crypto.randomUUID(),
+      name,
+      photo,
+      active: editingEmployee ? editingEmployee.active : true,
+    };
+
+    await saveEmployee(employeeData);
     setShowEmployeeModal(false);
     setEditingEmployee(null);
     setTempPhoto("");
+    toast.success(editingEmployee ? "Funcionário atualizado!" : "Funcionário cadastrado.");
   };
 
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -685,7 +741,7 @@ const AdminPanel = () => {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const data = new Uint8Array(event.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: "array" });
@@ -701,10 +757,9 @@ const AdminPanel = () => {
             active: true
           }));
 
-          const updated = [...employees, ...newEmployees];
-          saveEmployees(updated);
-          setEmployees(updated);
-          broadcastEvent("DATA_UPDATE");
+          for (const emp of newEmployees) {
+            await saveEmployee(emp);
+          }
           toast.success("Lista importada com sucesso!");
         }
       } catch (err) {
@@ -719,7 +774,6 @@ const AdminPanel = () => {
     const worksheet = XLSX.utils.json_to_sheet(employees.map(e => ({
       id: e.id,
       name: e.name,
-      // Photo is excluded from Excel export to avoid the 32767 character limit error
     })));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Funcionários");
@@ -734,13 +788,12 @@ const AdminPanel = () => {
   };
 
   const handleDownloadDB = () => {
-    const db = {
-      employees: getEmployees(),
-      history: getHistory(),
-      config: getConfig(),
-      order: getCurrentOrder()
+    const dbData = {
+      employees,
+      history,
+      config
     };
-    const data = JSON.stringify(db, null, 2);
+    const data = JSON.stringify(dbData, null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -749,11 +802,13 @@ const AdminPanel = () => {
     a.click();
   };
 
-  const handleClearList = () => {
-    saveEmployees([]);
-    setEmployees([]);
-    broadcastEvent("DATA_UPDATE");
-    toast.success("Lista de funcionários limpa.");
+  const handleClearList = async () => {
+    if (window.confirm("Tem certeza que deseja limpar toda a lista?")) {
+      for (const emp of employees) {
+        await deleteEmployee(emp.id);
+      }
+      toast.success("Lista de funcionários limpa.");
+    }
   };
 
   const handlePrint = (historyEntry?: SortHistory) => {
@@ -770,130 +825,72 @@ const AdminPanel = () => {
     if (historyEntry) {
       listToPrint = historyEntry.order
         .map(id => employees.find(e => e.id === id))
-        .filter((e): e is Employee => !!e)
-        .map(e => ({ name: e.name }));
+        .filter(e => !!e)
+        .map(e => ({ name: e!.name }));
       printDate = new Date(historyEntry.date).toLocaleDateString('pt-BR');
-      subtitle = `Lista de Almoço - Sorteio de ${new Date(historyEntry.date).toLocaleString('pt-BR')}`;
+      subtitle = `Sorteio realizado em ${printDate}`;
     } else {
       listToPrint = employees.filter(e => e.active).map(e => ({ name: e.name }));
     }
-    
-    if (listToPrint.length === 0) {
-      toast.error("Não há funcionários para imprimir.");
-      printWindow.close();
-      return;
-    }
 
-    const employeesList = listToPrint
-      .map((e, index) => `
-        <tr>
-          <td style="border: 1px solid #ddd; padding: 6px 10px; text-align: center; font-weight: bold; width: 40px;">${index + 1}</td>
-          <td style="border: 1px solid #ddd; padding: 6px 10px;">${e.name}</td>
-        </tr>
-      `).join("");
-
-    printWindow.document.write(`
+    const html = `
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Lista de Almoço - ${config.title}</title>
+          <title>Impressão - Fila do Almoço</title>
           <style>
-            @page { size: auto; margin: 10mm; }
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 0; color: #333; margin: 0; }
-            .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #3b82f6; padding-bottom: 15px; margin-bottom: 20px; }
-            .header h1 { margin: 0; color: #1e40af; font-size: 20px; }
-            .header-info { text-align: right; }
-            .container { 
-              display: grid; 
-              grid-template-columns: ${listToPrint.length > 30 ? '1fr 1fr' : '1fr'}; 
-              gap: 20px; 
-            }
-            table { width: 100%; border-collapse: collapse; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-            th { background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 8px; text-align: left; color: #1e40af; font-weight: bold; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
-            td { border: 1px solid #e5e7eb; padding: 6px 10px; font-size: 13px; }
-            tr:nth-child(even) { background-color: #f9fafb; }
+            body { font-family: sans-serif; padding: 40px; color: #333; }
+            h1 { text-align: center; margin-bottom: 5px; }
+            h2 { text-align: center; font-weight: normal; font-size: 18px; margin-top: 0; margin-bottom: 30px; color: #666; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .pos { width: 50px; text-align: center; font-weight: bold; }
             @media print {
-              body { padding: 0; }
               .no-print { display: none; }
             }
           </style>
         </head>
         <body>
-          <div class="header">
-            <div>
-              <h1>${config.title}</h1>
-              <p style="margin: 3px 0 0 0; color: #6b7280; font-size: 14px; font-weight: 500;">${subtitle}</p>
-            </div>
-            <div class="header-info">
-              <p style="margin: 0; font-size: 14px; font-weight: bold;">Data: ${printDate}</p>
-              <p style="margin: 3px 0 0 0; font-size: 12px; color: #6b7280;">Total: ${listToPrint.length} funcionários</p>
-            </div>
+          <h1>${config?.title || "Fila do Almoço"}</h1>
+          <h2>${subtitle}</h2>
+          <table>
+            <thead>
+              <tr>
+                <th class="pos">#</th>
+                <th>Nome do Funcionário</th>
+                <th>Assinatura / Observação</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${listToPrint.map((item, idx) => `
+                <tr>
+                  <td class="pos">${idx + 1}</td>
+                  <td>${item.name}</td>
+                  <td></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          <div style="margin-top: 50px; text-align: center; font-size: 12px; color: #999;">
+            Documento gerado em ${new Date().toLocaleString('pt-BR')}
           </div>
-          
-          <div class="container">
-            ${listToPrint.length > 30 ? `
-              <table>
-                <thead>
-                  <tr>
-                    <th style="width: 40px; text-align: center;">#</th>
-                    <th>Nome</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${listToPrint.slice(0, Math.ceil(listToPrint.length / 2)).map((e, i) => `
-                    <tr>
-                      <td style="border: 1px solid #ddd; padding: 6px 10px; text-align: center; font-weight: bold;">${i + 1}</td>
-                      <td style="border: 1px solid #ddd; padding: 6px 10px;">${e.name}</td>
-                    </tr>
-                  `).join("")}
-                </tbody>
-              </table>
-              <table>
-                <thead>
-                  <tr>
-                    <th style="width: 40px; text-align: center;">#</th>
-                    <th>Nome</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${listToPrint.slice(Math.ceil(listToPrint.length / 2)).map((e, i) => `
-                    <tr>
-                      <td style="border: 1px solid #ddd; padding: 6px 10px; text-align: center; font-weight: bold;">${i + Math.ceil(listToPrint.length / 2) + 1}</td>
-                      <td style="border: 1px solid #ddd; padding: 6px 10px;">${e.name}</td>
-                    </tr>
-                  `).join("")}
-                </tbody>
-              </table>
-            ` : `
-              <table>
-                <thead>
-                  <tr>
-                    <th style="width: 40px; text-align: center;">#</th>
-                    <th>Nome do Funcionário</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${employeesList}
-                </tbody>
-              </table>
-            `}
-          </div>
-          
           <script>
             window.onload = () => {
-              setTimeout(() => {
-                window.print();
-              }, 500);
+              window.print();
+              // window.close();
             };
           </script>
         </body>
       </html>
-    `);
+    `;
+
+    printWindow.document.write(html);
     printWindow.document.close();
     setShowMenu(false);
   };
 
-  const handleSaveConfig = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveConfig = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const newConfig: AppConfig = {
@@ -902,16 +899,15 @@ const AdminPanel = () => {
       logoUrl: tempLogo || (formData.get("logoUrl") as string),
       nextSortDate: formData.get("nextSortDate") as string,
     };
-    saveConfig(newConfig);
+    await saveConfig(newConfig);
     setConfig(newConfig);
-    broadcastEvent("DATA_UPDATE");
     setShowConfigModal(false);
     setTempBanner("");
     setTempLogo("");
     toast.success("Configurações salvas.");
   };
 
-  const handleSaveAdmin = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveAdmin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const username = formData.get("username") as string;
@@ -922,11 +918,18 @@ const AdminPanel = () => {
       username,
       password
     };
-    const updated = [...admins, newAdmin];
-    saveAdmins(updated);
-    setAdmins(updated);
+    await saveAdmin(newAdmin);
     setShowAdminModal(false);
     toast.success("Administrador adicionado.");
+  };
+
+  const handleDeleteAdmin = async (id: string) => {
+    if (admins.length <= 1) {
+      toast.error("Não é possível remover o último administrador.");
+      return;
+    }
+    await deleteAdmin(id);
+    toast.success("Administrador removido.");
   };
 
   return (
@@ -999,7 +1002,7 @@ const AdminPanel = () => {
                         <Download size={18} /> Baixar Banco de Dados
                       </button>
                       <button onClick={() => { setShowAdminModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
-                        <User size={18} /> Perfil Administrador
+                        <UserIcon size={18} /> Perfil Administrador
                       </button>
                       <button onClick={() => { setShowConfigModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-gray-700 transition-colors text-sm font-medium">
                         <Settings size={18} /> Personalizar App
@@ -1506,23 +1509,16 @@ const AdminPanel = () => {
                       <div key={admin.id} className="flex items-center justify-between p-3.5 bg-gray-50/50 dark:bg-gray-800/50 rounded-2xl border border-gray-100 dark:border-gray-700">
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 bg-white dark:bg-gray-800 rounded-lg flex items-center justify-center text-blue-600 dark:text-blue-400 shadow-sm">
-                            <User size={16} />
+                            <UserIcon size={16} />
                           </div>
                           <span className="font-bold text-gray-700 dark:text-gray-200 text-sm md:text-base">{admin.username}</span>
                         </div>
-                        {admins.length > 1 && (
-                          <button 
-                            onClick={() => {
-                              const updated = admins.filter(a => a.id !== admin.id);
-                              saveAdmins(updated);
-                              setAdmins(updated);
-                              toast.success("Administrador removido.");
-                            }}
-                            className="text-red-400 hover:text-red-600 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all"
-                          >
-                            <Trash2 size={18} />
-                          </button>
-                        )}
+                        <button 
+                          onClick={() => handleDeleteAdmin(admin.id)}
+                          className="text-red-400 hover:text-red-600 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all"
+                        >
+                          <Trash2 size={18} />
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -1579,7 +1575,7 @@ const AdminPanel = () => {
 
 export default function App() {
   return (
-    <>
+    <ErrorBoundary>
       <Toaster position="top-center" richColors />
       <Router>
         <Routes>
@@ -1589,6 +1585,6 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Router>
-    </>
+    </ErrorBoundary>
   );
 }

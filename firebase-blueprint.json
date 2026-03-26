@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "Employee": {
+      "title": "Employee",
+      "description": "An employee in the lunch queue.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "photo": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["id", "name", "active"]
+    },
+    "SortHistory": {
+      "title": "SortHistory",
+      "description": "A record of a lunch queue sort.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "order": { "type": "array", "items": { "type": "string" } },
+        "responsibleAdmin": { "type": "string" }
+      },
+      "required": ["id", "date", "order"]
+    },
+    "AppConfig": {
+      "title": "AppConfig",
+      "description": "Application configuration.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "bannerUrl": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "nextSortDate": { "type": "string" }
+      },
+      "required": ["title", "bannerUrl", "logoUrl"]
+    },
+    "CurrentOrder": {
+      "title": "CurrentOrder",
+      "description": "The current order of the lunch queue.",
+      "type": "object",
+      "properties": {
+        "order": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["order"]
+    },
+    "User": {
+      "title": "User",
+      "description": "A user of the application.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "Collection of employees."
+    },
+    "/history/{historyId}": {
+      "schema": "SortHistory",
+      "description": "Collection of sort history."
+    },
+    "/config/settings": {
+      "schema": "AppConfig",
+      "description": "Application settings."
+    },
+    "/config/currentOrder": {
+      "schema": "CurrentOrder",
+      "description": "Current queue order."
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles."
+    }
+  }
+}
