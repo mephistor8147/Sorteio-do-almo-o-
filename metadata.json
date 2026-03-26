@@ -1,0 +1,5 @@
+{
+  "name": "Fila do Almoço",
+  "description": "Aplicativo para gestão e organização de fila do almoço de funcionários com sorteio aleatório.",
+  "requestFramePermissions": []
+}
