@@ -622,12 +622,32 @@ const Login = () => {
           toast.success(`Bem-vindo, ${user.displayName}!`);
           navigate("/admin");
         } else {
-          toast.error("Você não tem permissão de administrador.");
+          toast.error("Acesso Negado", {
+            description: "Seu e-mail não está na lista de administradores autorizados."
+          });
           await logout();
         }
       }
-    } catch (error) {
-      toast.error("Erro ao realizar login com Google.");
+    } catch (error: any) {
+      console.error("Google Login Error:", error);
+      
+      let errorMessage = "Erro ao realizar login com Google.";
+      let description = "Tente novamente em instantes.";
+
+      if (error.code === 'auth/popup-blocked') {
+        errorMessage = "Popup Bloqueada";
+        description = "Por favor, permita popups para este site para fazer login.";
+      } else if (error.code === 'auth/unauthorized-domain') {
+        errorMessage = "Domínio não Autorizado";
+        description = "Este domínio não está autorizado no Console do Firebase.";
+      } else if (error.code === 'auth/operation-not-allowed') {
+        errorMessage = "Operação não Permitida";
+        description = "O provedor Google não está habilitado no Firebase Auth.";
+      } else if (error.message) {
+        description = error.message;
+      }
+
+      toast.error(errorMessage, { description });
     } finally {
       setLoading(false);
     }

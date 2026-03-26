@@ -4,10 +4,12 @@ import { getFirestore, getDocFromServer, doc } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
 
 // Initialize Firebase SDK
+console.log("Initializing Firebase with project:", firebaseConfig.projectId);
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export { onAuthStateChanged };
 
@@ -74,11 +76,13 @@ async function testConnection() {
 testConnection();
 
 export const signIn = async () => {
+  console.log("Starting Google Sign-In...");
   try {
     const result = await signInWithPopup(auth, googleProvider);
+    console.log("Sign-In successful for user:", result.user.email);
     return result.user;
-  } catch (error) {
-    console.error("Error signing in with Google", error);
+  } catch (error: any) {
+    console.error("Error signing in with Google:", error.code, error.message);
     throw error;
   }
 };
