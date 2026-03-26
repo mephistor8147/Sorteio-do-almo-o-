@@ -1,11 +1,25 @@
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  getDocs, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  limit,
+  Timestamp
+} from "firebase/firestore";
+import { db, handleFirestoreError, OperationType } from "./firebase";
 import { Employee, SortHistory, AppConfig, AdminUser } from "./types";
 
-const STORAGE_KEYS = {
-  EMPLOYEES: "lunch_employees",
-  HISTORY: "lunch_history",
-  CONFIG: "lunch_config",
-  CURRENT_ORDER: "lunch_current_order",
-  ADMINS: "lunch_admins",
+const COLLECTIONS = {
+  EMPLOYEES: "employees",
+  HISTORY: "history",
+  CONFIG: "config",
+  USERS: "users",
 };
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -15,176 +29,284 @@ const DEFAULT_CONFIG: AppConfig = {
   nextSortDate: "",
 };
 
-// --- Event Emitter for Subscriptions ---
-type Callback = (data: any) => void;
-const listeners: { [key: string]: Set<Callback> } = {};
-
-const subscribe = (key: string, callback: Callback) => {
-  if (!listeners[key]) {
-    listeners[key] = new Set();
-  }
-  listeners[key].add(callback);
-  
-  // Initial call
-  const data = getData(key);
-  callback(data);
-
-  return () => {
-    listeners[key].delete(callback);
-  };
-};
-
-const notify = (key: string) => {
-  if (listeners[key]) {
-    const data = getData(key);
-    listeners[key].forEach(callback => callback(data));
-  }
-};
-
-const getData = (key: string) => {
-  const data = localStorage.getItem(key);
-  if (!data) {
-    if (key === STORAGE_KEYS.CONFIG) return DEFAULT_CONFIG;
-    if (key === STORAGE_KEYS.EMPLOYEES) return [];
-    if (key === STORAGE_KEYS.HISTORY) return [];
-    if (key === STORAGE_KEYS.CURRENT_ORDER) return [];
-    if (key === STORAGE_KEYS.ADMINS) return [];
-    return null;
-  }
-  return JSON.parse(data);
-};
-
-const saveData = (key: string, data: any) => {
-  localStorage.setItem(key, JSON.stringify(data));
-  notify(key);
-};
-
 // --- Config ---
 
 export const getConfig = async (): Promise<AppConfig> => {
-  return getData(STORAGE_KEYS.CONFIG);
+  const path = `${COLLECTIONS.CONFIG}/settings`;
+  try {
+    const docRef = doc(db, COLLECTIONS.CONFIG, "settings");
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data() as AppConfig;
+    }
+    return DEFAULT_CONFIG;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+    return DEFAULT_CONFIG;
+  }
 };
 
 export const saveConfig = async (config: AppConfig) => {
-  saveData(STORAGE_KEYS.CONFIG, config);
+  const path = `${COLLECTIONS.CONFIG}/settings`;
+  try {
+    const docRef = doc(db, COLLECTIONS.CONFIG, "settings");
+    await setDoc(docRef, config);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
 };
 
-export const subscribeConfig = (callback: (config: AppConfig) => void) => {
-  return subscribe(STORAGE_KEYS.CONFIG, callback);
+export const subscribeConfig = (callback: (config: AppConfig) => void, onError?: (error: any) => void) => {
+  const path = `${COLLECTIONS.CONFIG}/settings`;
+  const docRef = doc(db, COLLECTIONS.CONFIG, "settings");
+  return onSnapshot(docRef, (docSnap) => {
+    if (docSnap.exists()) {
+      callback(docSnap.data() as AppConfig);
+    } else {
+      callback(DEFAULT_CONFIG);
+    }
+  }, (error) => {
+    if (onError) onError(error);
+    handleFirestoreError(error, OperationType.GET, path);
+  });
 };
 
 // --- Employees ---
 
 export const getEmployees = async (): Promise<Employee[]> => {
-  return getData(STORAGE_KEYS.EMPLOYEES);
+  const path = COLLECTIONS.EMPLOYEES;
+  try {
+    const querySnapshot = await getDocs(collection(db, path));
+    return querySnapshot.docs.map(doc => doc.data() as Employee);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+    return [];
+  }
 };
 
 export const saveEmployees = async (employees: Employee[]) => {
-  saveData(STORAGE_KEYS.EMPLOYEES, employees);
+  for (const employee of employees) {
+    await saveEmployee(employee);
+  }
 };
 
 export const saveEmployee = async (employee: Employee) => {
-  const employees = await getEmployees();
-  const index = employees.findIndex(e => e.id === employee.id);
-  if (index >= 0) {
-    employees[index] = employee;
-  } else {
-    employees.push(employee);
+  const path = `${COLLECTIONS.EMPLOYEES}/${employee.id}`;
+  try {
+    const docRef = doc(db, COLLECTIONS.EMPLOYEES, employee.id);
+    await setDoc(docRef, employee);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
-  saveData(STORAGE_KEYS.EMPLOYEES, employees);
 };
 
 export const deleteEmployee = async (id: string) => {
-  const employees = await getEmployees();
-  const filtered = employees.filter(e => e.id !== id);
-  saveData(STORAGE_KEYS.EMPLOYEES, filtered);
+  const path = `${COLLECTIONS.EMPLOYEES}/${id}`;
+  try {
+    const docRef = doc(db, COLLECTIONS.EMPLOYEES, id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
 };
 
-export const subscribeEmployees = (callback: (employees: Employee[]) => void) => {
-  return subscribe(STORAGE_KEYS.EMPLOYEES, callback);
+export const subscribeEmployees = (callback: (employees: Employee[]) => void, onError?: (error: any) => void) => {
+  const path = COLLECTIONS.EMPLOYEES;
+  const q = query(collection(db, path), orderBy("name"));
+  return onSnapshot(q, (querySnapshot) => {
+    const employees = querySnapshot.docs.map(doc => doc.data() as Employee);
+    callback(employees);
+  }, (error) => {
+    if (onError) onError(error);
+    handleFirestoreError(error, OperationType.GET, path);
+  });
 };
 
 // --- History ---
 
 export const getHistory = async (): Promise<SortHistory[]> => {
-  return getData(STORAGE_KEYS.HISTORY);
+  const path = COLLECTIONS.HISTORY;
+  try {
+    const q = query(collection(db, path), orderBy("date", "desc"), limit(50));
+    const querySnapshot = await getDocs(q);
+    return querySnapshot.docs.map(doc => doc.data() as SortHistory);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+    return [];
+  }
 };
 
 export const saveHistoryEntry = async (entry: SortHistory) => {
-  const history = await getHistory();
-  history.unshift(entry);
-  saveData(STORAGE_KEYS.HISTORY, history.slice(0, 50));
+  const path = `${COLLECTIONS.HISTORY}/${entry.id}`;
+  try {
+    const docRef = doc(db, COLLECTIONS.HISTORY, entry.id);
+    await setDoc(docRef, entry);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
 };
 
-export const subscribeHistory = (callback: (history: SortHistory[]) => void) => {
-  return subscribe(STORAGE_KEYS.HISTORY, callback);
+export const subscribeHistory = (callback: (history: SortHistory[]) => void, onError?: (error: any) => void) => {
+  const path = COLLECTIONS.HISTORY;
+  const q = query(collection(db, path), orderBy("date", "desc"), limit(50));
+  return onSnapshot(q, (querySnapshot) => {
+    const history = querySnapshot.docs.map(doc => doc.data() as SortHistory);
+    callback(history);
+  }, (error) => {
+    if (onError) onError(error);
+    handleFirestoreError(error, OperationType.GET, path);
+  });
 };
 
 // --- Current Order ---
 
 export const getCurrentOrder = async (): Promise<string[]> => {
-  return getData(STORAGE_KEYS.CURRENT_ORDER);
+  const path = `${COLLECTIONS.CONFIG}/currentOrder`;
+  try {
+    const docRef = doc(db, COLLECTIONS.CONFIG, "currentOrder");
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data().order as string[];
+    }
+    return [];
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+    return [];
+  }
 };
 
 export const saveCurrentOrder = async (order: string[]) => {
-  saveData(STORAGE_KEYS.CURRENT_ORDER, order);
+  const path = `${COLLECTIONS.CONFIG}/currentOrder`;
+  try {
+    const docRef = doc(db, COLLECTIONS.CONFIG, "currentOrder");
+    await setDoc(docRef, { order });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
 };
 
-export const subscribeCurrentOrder = (callback: (order: string[]) => void) => {
-  return subscribe(STORAGE_KEYS.CURRENT_ORDER, callback);
+export const subscribeCurrentOrder = (callback: (order: string[]) => void, onError?: (error: any) => void) => {
+  const path = `${COLLECTIONS.CONFIG}/currentOrder`;
+  const docRef = doc(db, COLLECTIONS.CONFIG, "currentOrder");
+  return onSnapshot(docRef, (docSnap) => {
+    if (docSnap.exists()) {
+      callback(docSnap.data().order as string[]);
+    } else {
+      callback([]);
+    }
+  }, (error) => {
+    if (onError) onError(error);
+    handleFirestoreError(error, OperationType.GET, path);
+  });
 };
 
 // --- Admins ---
 
 export const getAdmins = async (): Promise<AdminUser[]> => {
-  return getData(STORAGE_KEYS.ADMINS);
+  const path = COLLECTIONS.USERS;
+  try {
+    const q = query(collection(db, path));
+    const querySnapshot = await getDocs(q);
+    return querySnapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        username: data.email || data.username || "Unknown",
+      } as AdminUser;
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+    return [];
+  }
 };
 
 export const saveAdmin = async (admin: AdminUser) => {
-  const admins = await getAdmins();
-  const index = admins.findIndex(a => a.id === admin.id);
-  if (index >= 0) {
-    admins[index] = admin;
-  } else {
-    admins.push(admin);
+  const path = `${COLLECTIONS.USERS}/${admin.id}`;
+  try {
+    const docRef = doc(db, COLLECTIONS.USERS, admin.id);
+    await setDoc(docRef, {
+      uid: admin.id,
+      email: admin.username,
+      role: "admin"
+    }, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
-  saveData(STORAGE_KEYS.ADMINS, admins);
 };
 
 export const deleteAdmin = async (id: string) => {
-  const admins = await getAdmins();
-  const filtered = admins.filter(a => a.id !== id);
-  saveData(STORAGE_KEYS.ADMINS, filtered);
+  const path = `${COLLECTIONS.USERS}/${id}`;
+  try {
+    const docRef = doc(db, COLLECTIONS.USERS, id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
 };
 
-export const subscribeAdmins = (callback: (admins: AdminUser[]) => void) => {
-  return subscribe(STORAGE_KEYS.ADMINS, callback);
+export const subscribeAdmins = (callback: (admins: AdminUser[]) => void, onError?: (error: any) => void) => {
+  const path = COLLECTIONS.USERS;
+  const q = query(collection(db, path));
+  return onSnapshot(q, (querySnapshot) => {
+    const admins = querySnapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        username: data.email || data.username || "Unknown",
+      } as AdminUser;
+    });
+    callback(admins);
+  }, (error) => {
+    if (onError) onError(error);
+    handleFirestoreError(error, OperationType.GET, path);
+  });
+};
+
+export const checkIsAdmin = async (uid: string, email?: string | null): Promise<boolean> => {
+  if (email === "l2xbrasil@gmail.com") return true;
+  
+  try {
+    const docRef = doc(db, COLLECTIONS.USERS, uid);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data().role === "admin";
+    }
+    return false;
+  } catch (error) {
+    console.error("Error checking admin status", error);
+    return false;
+  }
 };
 
 // --- Sort Logic ---
 
 export const performNewSort = async (responsibleAdmin?: string) => {
-  const employees = await getEmployees();
-  const activeEmployees = employees.filter(e => e.active);
-  
-  if (activeEmployees.length === 0) return [];
+  try {
+    const employees = await getEmployees();
+    const activeEmployees = employees.filter(e => e.active);
+    
+    if (activeEmployees.length === 0) return [];
 
-  const shuffled = [...activeEmployees];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    const shuffled = [...activeEmployees];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    const order = shuffled.map((e) => e.id);
+    
+    await saveCurrentOrder(order);
+    
+    const newEntry: SortHistory = {
+      id: crypto.randomUUID(),
+      date: new Date().toISOString(),
+      order: order,
+      responsibleAdmin,
+    };
+    await saveHistoryEntry(newEntry);
+    
+    return order;
+  } catch (error) {
+    console.error("Error performing sort:", error);
+    return [];
   }
-  const order = shuffled.map((e) => e.id);
-  
-  await saveCurrentOrder(order);
-  
-  const newEntry: SortHistory = {
-    id: crypto.randomUUID(),
-    date: new Date().toISOString(),
-    order: order,
-    responsibleAdmin,
-  };
-  await saveHistoryEntry(newEntry);
-  
-  return order;
 };

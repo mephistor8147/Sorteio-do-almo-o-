@@ -1,10 +1,9 @@
 {
-  "projectId": "gen-lang-client-0325531019",
-  "appId": "1:102166592002:web:0fb357aedc7a2bebbd851b",
-  "apiKey": "AIzaSyBDjDyH3SsTS7jjbSsnmS4kP9dWfMjCnQ4",
-  "authDomain": "gen-lang-client-0325531019.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-e88494a5-3cbc-45af-bda6-d9b72417c547",
-  "storageBucket": "gen-lang-client-0325531019.firebasestorage.app",
-  "messagingSenderId": "102166592002",
+  "projectId": "fila-do-almoco",
+  "appId": "1:775239901899:web:efb0da1b268b3e430f714e",
+  "apiKey": "AIzaSyDD1eWL4IILGYB_ZHOm4sEtgc6OuDcG3ks",
+  "authDomain": "fila-do-almoco.firebaseapp.com",
+  "storageBucket": "fila-do-almoco.firebasestorage.app",
+  "messagingSenderId": "775239901899",
   "measurementId": ""
 }
