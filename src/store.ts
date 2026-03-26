@@ -10,7 +10,8 @@ import {
   query, 
   orderBy, 
   limit,
-  Timestamp
+  Timestamp,
+  writeBatch
 } from "firebase/firestore";
 import { db, handleFirestoreError, OperationType } from "./firebase";
 import { Employee, SortHistory, AppConfig, AdminUser } from "./types";
@@ -85,8 +86,30 @@ export const getEmployees = async (): Promise<Employee[]> => {
 };
 
 export const saveEmployees = async (employees: Employee[]) => {
-  for (const employee of employees) {
-    await saveEmployee(employee);
+  const path = COLLECTIONS.EMPLOYEES;
+  try {
+    const batch = writeBatch(db);
+    for (const employee of employees) {
+      const docRef = doc(db, COLLECTIONS.EMPLOYEES, employee.id);
+      batch.set(docRef, employee);
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+};
+
+export const clearEmployees = async () => {
+  const path = COLLECTIONS.EMPLOYEES;
+  try {
+    const querySnapshot = await getDocs(collection(db, path));
+    const batch = writeBatch(db);
+    querySnapshot.docs.forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 };
 

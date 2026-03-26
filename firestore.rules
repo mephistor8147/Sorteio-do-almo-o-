@@ -91,7 +91,8 @@ service cloud.firestore {
     function isValidConfig(data) {
       return hasRequiredFields(['title', 'bannerUrl', 'logoUrl']) &&
              data.title is string && data.title.size() > 0 && data.title.size() < 100 &&
-             data.bannerUrl is string && data.logoUrl is string;
+             data.bannerUrl is string && data.bannerUrl.size() < 1000000 &&
+             data.logoUrl is string && data.logoUrl.size() < 1000000;
     }
 
     function isValidCurrentOrder(data) {

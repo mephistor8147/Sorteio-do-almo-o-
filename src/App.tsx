@@ -36,6 +36,7 @@ import {
   saveEmployee, 
   deleteEmployee,
   saveEmployees,
+  clearEmployees,
   getHistory, 
   saveHistoryEntry,
   getConfig, 
@@ -101,7 +102,7 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
 // --- Utils ---
 
-const fileToBase64 = (file: File): Promise<string> => {
+const fileToBase64 = (file: File, maxWidth = 200, maxHeight = 200): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -110,8 +111,8 @@ const fileToBase64 = (file: File): Promise<string> => {
       img.src = event.target?.result as string;
       img.onload = () => {
         const canvas = document.createElement("canvas");
-        const MAX_WIDTH = 200;
-        const MAX_HEIGHT = 200;
+        const MAX_WIDTH = maxWidth;
+        const MAX_HEIGHT = maxHeight;
         let width = img.width;
         let height = img.height;
 
@@ -892,16 +893,18 @@ const AdminPanel = () => {
         const jsonData = XLSX.utils.sheet_to_json(worksheet) as any[];
 
         if (Array.isArray(jsonData)) {
+          if (window.confirm("Deseja limpar a lista atual antes de importar?")) {
+            await clearEmployees();
+          }
+
           const newEmployees: Employee[] = jsonData.map((item: any) => ({
             id: item.id || crypto.randomUUID(),
             name: item.name || item.Nome || "Sem Nome",
             photo: item.photo || item.Foto || "",
-            active: true
+            active: item.active !== undefined ? item.active : (item.Ativo !== undefined ? item.Ativo : true)
           }));
 
-          for (const emp of newEmployees) {
-            await saveEmployee(emp);
-          }
+          await saveEmployees(newEmployees);
           toast.success("Lista importada com sucesso!");
         }
       } catch (err) {
@@ -916,6 +919,8 @@ const AdminPanel = () => {
     const worksheet = XLSX.utils.json_to_sheet(employees.map(e => ({
       id: e.id,
       name: e.name,
+      photo: e.photo,
+      active: e.active
     })));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Funcionários");
@@ -946,9 +951,7 @@ const AdminPanel = () => {
 
   const handleClearList = async () => {
     if (window.confirm("Tem certeza que deseja limpar toda a lista?")) {
-      for (const emp of employees) {
-        await deleteEmployee(emp.id);
-      }
+      await clearEmployees();
       toast.success("Lista de funcionários limpa.");
     }
   };
@@ -1250,9 +1253,10 @@ const AdminPanel = () => {
                     <div className="flex items-center gap-0.5 md:gap-1">
                       <button 
                         onClick={() => {
-                          const updated = employees.map(e => e.id === emp.id ? { ...e, active: !e.active } : e);
-                          setEmployees(updated);
-                          saveEmployees(updated);
+                          const updatedEmp = { ...emp, active: !emp.active };
+                          const updatedList = employees.map(e => e.id === emp.id ? updatedEmp : e);
+                          setEmployees(updatedList);
+                          saveEmployee(updatedEmp);
                         }}
                         className={cn(
                           "p-1.5 md:p-2 rounded-lg transition-colors",
@@ -1549,7 +1553,7 @@ const AdminPanel = () => {
                               onChange={async (e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
-                                  const base64 = await fileToBase64(file);
+                                  const base64 = await fileToBase64(file, 1200, 400);
                                   setTempBanner(base64);
                                 }
                               }}
