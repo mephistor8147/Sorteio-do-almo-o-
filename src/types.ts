@@ -23,4 +23,6 @@ export interface AdminUser {
   id: string;
   username: string;
   password?: string;
+  photo?: string;
+  canEditAdmins?: boolean;
 }

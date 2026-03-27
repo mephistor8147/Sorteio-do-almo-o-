@@ -235,6 +235,8 @@ export const getAdmins = async (): Promise<AdminUser[]> => {
       return {
         id: doc.id,
         username: data.email || data.username || "Unknown",
+        photo: data.photo || "",
+        canEditAdmins: data.canEditAdmins || false,
       } as AdminUser;
     });
   } catch (error) {
@@ -247,11 +249,17 @@ export const saveAdmin = async (admin: AdminUser) => {
   const path = `${COLLECTIONS.USERS}/${admin.id}`;
   try {
     const docRef = doc(db, COLLECTIONS.USERS, admin.id);
-    await setDoc(docRef, {
+    const data: any = {
       uid: admin.id,
       email: admin.username,
-      role: "admin"
-    }, { merge: true });
+      role: "admin",
+      photo: admin.photo || "",
+      canEditAdmins: admin.canEditAdmins || false,
+    };
+    if (admin.password) {
+      data.password = admin.password;
+    }
+    await setDoc(docRef, data, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -276,6 +284,8 @@ export const subscribeAdmins = (callback: (admins: AdminUser[]) => void, onError
       return {
         id: doc.id,
         username: data.email || data.username || "Unknown",
+        photo: data.photo || "",
+        canEditAdmins: data.canEditAdmins || false,
       } as AdminUser;
     });
     callback(admins);
@@ -285,19 +295,34 @@ export const subscribeAdmins = (callback: (admins: AdminUser[]) => void, onError
   });
 };
 
-export const checkIsAdmin = async (uid: string, email?: string | null): Promise<boolean> => {
-  if (email === "l2xbrasil@gmail.com") return true;
+export const checkIsAdmin = async (uid: string, email?: string | null): Promise<AdminUser | null> => {
+  if (email === "l2xbrasil@gmail.com") {
+    return {
+      id: uid,
+      username: email,
+      canEditAdmins: true,
+      photo: ""
+    };
+  }
   
   try {
     const docRef = doc(db, COLLECTIONS.USERS, uid);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-      return docSnap.data().role === "admin";
+      const data = docSnap.data();
+      if (data.role === "admin") {
+        return {
+          id: docSnap.id,
+          username: data.email || data.username || "Unknown",
+          photo: data.photo || "",
+          canEditAdmins: data.canEditAdmins || false,
+        } as AdminUser;
+      }
     }
-    return false;
+    return null;
   } catch (error) {
     console.error("Error checking admin status", error);
-    return false;
+    return null;
   }
 };
 

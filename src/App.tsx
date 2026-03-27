@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, Component } from "react";
+import React, { useState, useEffect, useRef, Component, createContext, useContext } from "react";
 import { BrowserRouter as Router, Routes, Route, Link, useNavigate, Navigate } from "react-router-dom";
 import { 
   Plus, 
@@ -61,13 +61,13 @@ import { Employee, SortHistory, AppConfig, AdminUser } from "./types";
 
 interface AuthContextType {
   user: any;
-  isAdmin: boolean;
+  isAdmin: AdminUser | null;
   loading: boolean;
 }
 
 const AuthContext = React.createContext<AuthContextType>({
   user: null,
-  isAdmin: false,
+  isAdmin: null,
   loading: true,
 });
 
@@ -75,17 +75,17 @@ const useAuth = () => React.useContext(AuthContext);
 
 const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<any>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin, setIsAdmin] = useState<AdminUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       if (firebaseUser) {
-        const adminStatus = await checkIsAdmin(firebaseUser.uid, firebaseUser.email);
-        setIsAdmin(adminStatus);
+        const adminData = await checkIsAdmin(firebaseUser.uid, firebaseUser.email);
+        setIsAdmin(adminData);
       } else {
-        setIsAdmin(false);
+        setIsAdmin(null);
       }
       setLoading(false);
     });
@@ -198,11 +198,20 @@ class ErrorBoundary extends Component<any, any> {
 
 // --- Components ---
 
-const ThemeToggle = () => {
+// --- Theme Context ---
+
+interface ThemeContextType {
+  isDark: boolean;
+  toggleTheme: () => void;
+}
+
+const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
+
+export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("theme") === "dark" || 
-        (!localStorage.getItem("theme") && window.matchMedia("(pre-hooks/color-scheme: dark)").matches);
+        (!localStorage.getItem("theme") && window.matchMedia("(prefers-color-scheme: dark)").matches);
     }
     return false;
   });
@@ -218,9 +227,29 @@ const ThemeToggle = () => {
     }
   }, [isDark]);
 
+  const toggleTheme = () => setIsDark(prev => !prev);
+
+  return (
+    <ThemeContext.Provider value={{ isDark, toggleTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  );
+};
+
+export const useTheme = () => {
+  const context = useContext(ThemeContext);
+  if (context === undefined) {
+    throw new Error("useTheme must be used within a ThemeProvider");
+  }
+  return context;
+};
+
+const ThemeToggle = () => {
+  const { isDark, toggleTheme } = useTheme();
+
   return (
     <button
-      onClick={() => setIsDark(!isDark)}
+      onClick={toggleTheme}
       className="p-2 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
       title={isDark ? "Mudar para modo claro" : "Mudar para modo escuro"}
     >
@@ -421,7 +450,13 @@ const Home = () => {
       unsubscribeConfig();
       unsubscribeOrder();
     };
-  }, [config?.logoUrl]);
+  }, []);
+
+  useEffect(() => {
+    if (config?.title) {
+      document.title = config.title;
+    }
+  }, [config?.title]);
 
   // Check for nextSortDate expiry and trigger automatic sort
   useEffect(() => {
@@ -449,7 +484,7 @@ const Home = () => {
 
     const interval = setInterval(check, 2000);
     return () => clearInterval(interval);
-  }, [config?.nextSortDate, config?.logoUrl]);
+  }, [config?.nextSortDate]);
 
   if (!config) return <div className="min-h-screen flex items-center justify-center dark:bg-gray-900 dark:text-white">Carregando...</div>;
 
@@ -482,13 +517,23 @@ const Home = () => {
                         .map(id => employees.find(e => e.id === id))
                         .filter((e): e is Employee => !!e);
                       
-                      const employeesList = sorted
-                        .map((e, index) => `
-                          <tr>
-                            <td style="border: 1px solid #ddd; padding: 6px 10px; text-align: center; font-weight: bold; width: 40px;">${index + 1}</td>
-                            <td style="border: 1px solid #ddd; padding: 6px 10px;">${e.name}</td>
-                          </tr>
-                        `).join("");
+                      const midPoint = Math.ceil(sorted.length / 2);
+                      const leftColumn = sorted.slice(0, midPoint);
+                      const rightColumn = sorted.slice(midPoint);
+
+                      const renderTable = (items: Employee[], startIdx: number) => `
+                        <table>
+                          <thead><tr><th style="width: 40px; text-align: center;">#</th><th>Nome</th></tr></thead>
+                          <tbody>
+                            ${items.map((e, index) => `
+                              <tr>
+                                <td style="border: 1px solid #ddd; padding: 6px 10px; text-align: center; font-weight: bold; width: 40px;">${startIdx + index + 1}</td>
+                                <td style="border: 1px solid #ddd; padding: 6px 10px;">${e.name}</td>
+                              </tr>
+                            `).join("")}
+                          </tbody>
+                        </table>
+                      `;
 
                       printWindow.document.write(`
                         <!DOCTYPE html>
@@ -501,7 +546,7 @@ const Home = () => {
                               .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #3b82f6; padding-bottom: 15px; margin-bottom: 20px; }
                               .header h1 { margin: 0; color: #1e40af; font-size: 20px; }
                               .header-info { text-align: right; }
-                              .container { display: grid; grid-template-columns: ${sorted.length > 30 ? '1fr 1fr' : '1fr'}; gap: 20px; }
+                              .container { display: grid; grid-template-columns: ${sorted.length > 25 ? '1fr 1fr' : '1fr'}; gap: 20px; }
                               table { width: 100%; border-collapse: collapse; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
                               th { background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 8px; text-align: left; color: #1e40af; font-weight: bold; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
                               td { border: 1px solid #e5e7eb; padding: 6px 10px; font-size: 13px; }
@@ -520,12 +565,10 @@ const Home = () => {
                               </div>
                             </div>
                             <div class="container">
-                              <table>
-                                <thead><tr><th style="width: 40px; text-align: center;">#</th><th>Nome</th></tr></thead>
-                                <tbody>${employeesList}</tbody>
-                              </table>
+                              ${renderTable(leftColumn, 0)}
+                              ${sorted.length > 25 ? renderTable(rightColumn, midPoint) : ''}
                             </div>
-                            <script>window.onload = () => { setTimeout(() => { window.print(); }, 500); };</script>
+                            <script>window.onload = () => { setTimeout(() => { window.print(); window.close(); }, 500); };</script>
                           </body>
                         </html>
                       `);
@@ -772,8 +815,8 @@ const Login = () => {
 };
 
 const AdminPanel = () => {
-  const { user, isAdmin: isAuthAdmin, loading: authLoading } = useAuth();
-  const [activeTab, setActiveTab] = useState<"employees" | "history">("employees");
+  const { user, isAdmin, loading: authLoading } = useAuth();
+  const [activeTab, setActiveTab] = useState<"employees" | "history" | "config">("employees");
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [history, setHistory] = useState<SortHistory[]>([]);
   const [showMenu, setShowMenu] = useState(false);
@@ -781,12 +824,14 @@ const AdminPanel = () => {
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
+  const [editingAdmin, setEditingAdmin] = useState<AdminUser | null>(null);
   const [admins, setAdmins] = useState<AdminUser[]>([]);
   const [error, setError] = useState<any>(null);
   
   const [tempPhoto, setTempPhoto] = useState<string>("");
-  const [tempBanner, setTempBanner] = useState<string>("");
-  const [tempLogo, setTempLogo] = useState<string>("");
+  const [tempAdminPhoto, setTempAdminPhoto] = useState<string>("");
+  const [tempBanner, setTempBanner] = useState<string | null>(null);
+  const [tempLogo, setTempLogo] = useState<string | null>(null);
 
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -797,17 +842,17 @@ const AdminPanel = () => {
   useEffect(() => {
     if (!authLoading) {
       const isLegacyAdmin = sessionStorage.getItem("is_admin") === "true";
-      if (!isAuthAdmin && !isLegacyAdmin) {
+      if (!isAdmin && !isLegacyAdmin) {
         navigate("/login");
       }
       setLoading(false);
     }
-  }, [navigate, isAuthAdmin, authLoading]);
+  }, [navigate, isAdmin, authLoading]);
 
   useEffect(() => {
     if (authLoading) return;
     const isLegacyAdmin = sessionStorage.getItem("is_admin") === "true";
-    if (!isAuthAdmin && !isLegacyAdmin) return;
+    if (!isAdmin && !isLegacyAdmin) return;
 
     // Real-time listeners via local store subscriptions
     const unsubscribeEmployees = subscribeEmployees((data) => {
@@ -832,7 +877,7 @@ const AdminPanel = () => {
       unsubscribeConfig();
       unsubscribeAdmins();
     };
-  }, [isAuthAdmin, authLoading]);
+  }, [isAdmin, authLoading]);
 
   const handleLogout = async () => {
     sessionStorage.removeItem("is_admin");
@@ -978,52 +1023,64 @@ const AdminPanel = () => {
       listToPrint = employees.filter(e => e.active).map(e => ({ name: e.name }));
     }
 
+    const midPoint = Math.ceil(listToPrint.length / 2);
+    const leftColumn = listToPrint.slice(0, midPoint);
+    const rightColumn = listToPrint.slice(midPoint);
+
+    const renderTable = (items: { name: string }[], startIdx: number) => `
+      <table>
+        <thead>
+          <tr>
+            <th class="pos">Nº</th>
+            <th>Nome do Funcionário</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map((item, idx) => `
+            <tr>
+              <td class="pos">${startIdx + idx + 1}</td>
+              <td>${item.name}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+
     const html = `
       <!DOCTYPE html>
       <html>
         <head>
           <title>Impressão - Fila do Almoço</title>
           <style>
-            body { font-family: sans-serif; padding: 40px; color: #333; }
-            h1 { text-align: center; margin-bottom: 5px; }
-            h2 { text-align: center; font-weight: normal; font-size: 18px; margin-top: 0; margin-bottom: 30px; color: #666; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            .pos { width: 50px; text-align: center; font-weight: bold; }
+            @page { size: portrait; margin: 10mm; }
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; color: #333; margin: 0; }
+            h1 { text-align: center; margin-bottom: 5px; font-size: 24px; color: #1e40af; }
+            h2 { text-align: center; font-weight: normal; font-size: 16px; margin-top: 0; margin-bottom: 20px; color: #666; }
+            .container { display: grid; grid-template-columns: ${listToPrint.length > 25 ? '1fr 1fr' : '1fr'}; gap: 20px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+            th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; font-size: 14px; }
+            th { background-color: #f8fafc; color: #1e40af; font-weight: bold; text-transform: uppercase; font-size: 12px; }
+            .pos { width: 60px; text-align: center; font-weight: bold; background-color: #f1f5f9; }
             @media print {
               .no-print { display: none; }
+              body { padding: 0; }
             }
           </style>
         </head>
         <body>
           <h1>${config?.title || "Fila do Almoço"}</h1>
           <h2>${subtitle}</h2>
-          <table>
-            <thead>
-              <tr>
-                <th class="pos">#</th>
-                <th>Nome do Funcionário</th>
-                <th>Assinatura / Observação</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${listToPrint.map((item, idx) => `
-                <tr>
-                  <td class="pos">${idx + 1}</td>
-                  <td>${item.name}</td>
-                  <td></td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-          <div style="margin-top: 50px; text-align: center; font-size: 12px; color: #999;">
+          <div class="container">
+            ${renderTable(leftColumn, 0)}
+            ${listToPrint.length > 25 ? renderTable(rightColumn, midPoint) : ''}
+          </div>
+          <div style="margin-top: 30px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 10px;">
             Documento gerado em ${new Date().toLocaleString('pt-BR')}
           </div>
           <script>
             window.onload = () => {
               window.print();
-              // window.close();
+              setTimeout(() => { window.close(); }, 500);
             };
           </script>
         </body>
@@ -1040,32 +1097,44 @@ const AdminPanel = () => {
     const formData = new FormData(e.currentTarget);
     const newConfig: AppConfig = {
       title: formData.get("title") as string,
-      bannerUrl: tempBanner || (formData.get("bannerUrl") as string),
-      logoUrl: tempLogo || (formData.get("logoUrl") as string),
+      bannerUrl: tempBanner !== null ? tempBanner : config.bannerUrl,
+      logoUrl: tempLogo !== null ? tempLogo : config.logoUrl,
       nextSortDate: formData.get("nextSortDate") as string,
     };
     await saveConfig(newConfig);
     setConfig(newConfig);
     setShowConfigModal(false);
-    setTempBanner("");
-    setTempLogo("");
+    setTempBanner(null);
+    setTempLogo(null);
     toast.success("Configurações salvas.");
   };
 
   const handleSaveAdmin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const username = formData.get("username") as string;
+    const username = isAdmin?.canEditAdmins ? (formData.get("username") as string) : isAdmin?.username;
     const password = formData.get("password") as string;
+    const photo = tempAdminPhoto || (formData.get("photo") as string);
+    const canEditAdmins = isAdmin?.canEditAdmins ? (formData.get("canEditAdmins") === "on") : isAdmin?.canEditAdmins;
 
-    const newAdmin: AdminUser = {
-      id: crypto.randomUUID(),
+    if (!username) {
+      toast.error("Nome de usuário é obrigatório.");
+      return;
+    }
+
+    const adminData: AdminUser = {
+      id: editingAdmin?.id || (isAdmin?.canEditAdmins ? crypto.randomUUID() : isAdmin?.id || ""),
       username,
-      password
+      photo,
+      canEditAdmins: !!canEditAdmins,
     };
-    await saveAdmin(newAdmin);
+    if (password) adminData.password = password;
+
+    await saveAdmin(adminData);
     setShowAdminModal(false);
-    toast.success("Administrador adicionado.");
+    setEditingAdmin(null);
+    setTempAdminPhoto("");
+    toast.success((editingAdmin || !isAdmin?.canEditAdmins) ? "Perfil atualizado." : "Administrador adicionado.");
   };
 
   const handleDeleteAdmin = async (id: string) => {
@@ -1108,6 +1177,13 @@ const AdminPanel = () => {
               <RefreshCw size={16} />
               Novo Sorteio
             </button>
+            <button 
+              onClick={() => setShowConfigModal(true)}
+              className="hidden lg:flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-lg shadow-blue-600/20"
+            >
+              <Settings size={16} />
+              Personalizar App
+            </button>
             <div className="relative">
               <button 
                 onClick={() => setShowMenu(!showMenu)}
@@ -1146,12 +1222,19 @@ const AdminPanel = () => {
                       <button onClick={handleDownloadDB} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
                         <Download size={18} /> Baixar Banco de Dados
                       </button>
-                      <button onClick={() => { setShowAdminModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
-                        <UserIcon size={18} /> Perfil Administrador
-                      </button>
-                      <button onClick={() => { setShowConfigModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-gray-700 transition-colors text-sm font-medium">
+                      {isAdmin?.canEditAdmins && (
+                        <button onClick={() => { setShowAdminModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
+                          <UserIcon size={18} /> Gerenciar Administradores
+                        </button>
+                      )}
+                      <button onClick={() => { setShowConfigModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
                         <Settings size={18} /> Personalizar App
                       </button>
+                      {!isAdmin?.canEditAdmins && (
+                        <button onClick={() => { setShowAdminModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
+                          <UserIcon size={18} /> Meu Perfil
+                        </button>
+                      )}
                       <button 
                         onClick={() => {
                           if (Notification.permission !== "granted") {
@@ -1165,12 +1248,12 @@ const AdminPanel = () => {
                           }
                           setShowMenu(false);
                         }} 
-                        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-gray-700 transition-colors text-sm font-medium"
+                        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium"
                       >
                         <Clock size={18} /> Ativar Notificações
                       </button>
-                      <div className="h-px bg-gray-100 my-2" />
-                      <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-red-50 text-red-600 transition-colors text-sm font-medium">
+                      <div className="h-px bg-gray-100 dark:bg-gray-800 my-2" />
+                      <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 transition-colors text-sm font-medium">
                         <LogOut size={18} /> Sair
                       </button>
                     </motion.div>
@@ -1211,20 +1294,39 @@ const AdminPanel = () => {
               Histórico
             </div>
           </button>
+          <button 
+            onClick={() => setActiveTab("config")}
+            className={cn(
+              "flex-1 py-3 md:py-4 text-xs md:text-sm font-bold transition-all border-b-2",
+              activeTab === "config" ? "border-blue-600 text-blue-700 dark:text-blue-400" : "border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            )}
+          >
+            <div className="flex items-center justify-center gap-2">
+              <Settings size={16} className="md:w-[18px] md:h-[18px]" />
+              Config.
+            </div>
+          </button>
         </div>
       </div>
 
       {/* Content */}
       <main className="flex-grow p-4 max-w-5xl mx-auto w-full">
-        {activeTab === "employees" ? (
+        {activeTab === "employees" && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between md:hidden">
+            <div className="flex flex-col sm:flex-row items-center gap-3 md:hidden">
               <button 
                 onClick={handleNewSort}
                 className="w-full flex items-center justify-center gap-2 bg-emerald-500 text-white py-3 rounded-2xl font-bold shadow-lg shadow-emerald-500/20"
               >
                 <RefreshCw size={18} />
                 Novo Sorteio
+              </button>
+              <button 
+                onClick={() => setShowConfigModal(true)}
+                className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-2xl font-bold shadow-lg shadow-blue-600/20"
+              >
+                <Settings size={18} />
+                Personalizar App
               </button>
             </div>
 
@@ -1296,7 +1398,9 @@ const AdminPanel = () => {
               </div>
             )}
           </div>
-        ) : (
+        )}
+
+        {activeTab === "history" && (
           <div className="space-y-4">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Histórico de Sorteios</h2>
@@ -1364,6 +1468,36 @@ const AdminPanel = () => {
                 <p className="text-gray-400 dark:text-gray-500">Os sorteios realizados aparecerão aqui.</p>
               </div>
             )}
+          </div>
+        )}
+
+        {activeTab === "config" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Configurações do App</h2>
+            </div>
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-12 h-12 bg-blue-50 dark:bg-blue-900/30 rounded-2xl flex items-center justify-center text-blue-600 dark:text-blue-400">
+                  <Settings size={24} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-800 dark:text-gray-100">Personalizar Aparência</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Altere o título, logo e banner da aplicação.</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  setTempBanner(config.bannerUrl || null);
+                  setTempLogo(config.logoUrl || null);
+                  setShowConfigModal(true);
+                }}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-2xl font-bold transition-all shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2"
+              >
+                <Edit size={18} />
+                Personalizar Agora
+              </button>
+            </div>
           </div>
         )}
       </main>
@@ -1536,8 +1670,8 @@ const AdminPanel = () => {
                       <label className="block text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Banner da Empresa</label>
                       <div className="flex flex-col gap-3">
                         <div className="w-full h-28 bg-gray-50 dark:bg-gray-800 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700 flex items-center justify-center overflow-hidden relative group transition-all hover:border-blue-400 hover:bg-blue-50/30">
-                          {(tempBanner || config.bannerUrl) ? (
-                            <img src={tempBanner || config.bannerUrl} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          {(tempBanner !== null ? tempBanner : config.bannerUrl) ? (
+                            <img src={tempBanner !== null ? tempBanner : config.bannerUrl} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                           ) : (
                             <ImageIcon size={32} strokeWidth={1.5} className="text-gray-300 dark:text-gray-600" />
                           )}
@@ -1563,7 +1697,7 @@ const AdminPanel = () => {
                         <div className="relative group">
                           <input 
                             name="bannerUrl" 
-                            value={tempBanner || config.bannerUrl} 
+                            value={tempBanner !== null ? tempBanner : config.bannerUrl} 
                             onChange={(e) => setTempBanner(e.target.value)}
                             className="w-full pl-11 pr-4 py-3 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 focus:bg-white dark:focus:bg-gray-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 outline-none transition-all text-xs md:text-sm font-medium text-gray-800 dark:text-gray-100" 
                             placeholder="Ou cole a URL do banner"
@@ -1577,8 +1711,8 @@ const AdminPanel = () => {
                       <label className="block text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Logo da Empresa</label>
                       <div className="flex items-center gap-4">
                         <div className="w-16 h-16 md:w-20 md:h-20 bg-gray-50 dark:bg-gray-800 rounded-full border-2 border-dashed border-gray-200 dark:border-gray-700 flex items-center justify-center overflow-hidden relative group flex-shrink-0 transition-all hover:border-blue-400 hover:bg-blue-50/30">
-                          {(tempLogo || config.logoUrl) ? (
-                            <img src={tempLogo || config.logoUrl} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          {(tempLogo !== null ? tempLogo : config.logoUrl) ? (
+                            <img src={tempLogo !== null ? tempLogo : config.logoUrl} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                           ) : (
                             <ImageIcon size={24} strokeWidth={1.5} className="text-gray-300 dark:text-gray-600" />
                           )}
@@ -1601,7 +1735,7 @@ const AdminPanel = () => {
                         <div className="flex-grow relative group">
                           <input 
                             name="logoUrl" 
-                            value={tempLogo || config.logoUrl} 
+                            value={tempLogo !== null ? tempLogo : config.logoUrl} 
                             onChange={(e) => setTempLogo(e.target.value)}
                             className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 focus:bg-white dark:focus:bg-gray-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 outline-none transition-all text-xs md:text-sm font-medium text-gray-800 dark:text-gray-100" 
                             placeholder="Ou cole a URL do logo"
@@ -1636,7 +1770,7 @@ const AdminPanel = () => {
 
         {showAdminModal && (
           <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowAdminModal(false)} />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { setShowAdminModal(false); setEditingAdmin(null); setTempAdminPhoto(""); }} />
             <motion.div 
               initial={{ opacity: 0, y: 100, scale: 1 }} 
               animate={{ opacity: 1, y: 0, scale: 1 }} 
@@ -1644,72 +1778,156 @@ const AdminPanel = () => {
               className="relative bg-white dark:bg-gray-900 w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden max-h-[95vh] flex flex-col"
             >
               <div className="p-4 md:p-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
-                <h2 className="text-lg md:text-xl font-bold text-gray-800 dark:text-gray-100">Gerenciar Administradores</h2>
-                <button onClick={() => setShowAdminModal(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-gray-400 dark:text-gray-500"><X size={20} /></button>
+                <h2 className="text-lg md:text-xl font-bold text-gray-800 dark:text-gray-100">{editingAdmin ? "Editar Administrador" : "Gerenciar Administradores"}</h2>
+                <button onClick={() => { setShowAdminModal(false); setEditingAdmin(null); setTempAdminPhoto(""); }} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-gray-400 dark:text-gray-500"><X size={20} /></button>
               </div>
               <div className="p-6 space-y-6 overflow-y-auto">
-                <div className="space-y-3">
-                  <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Administradores Atuais</p>
-                  <div className="grid gap-2">
-                    {admins.map(admin => (
-                      <div key={admin.id} className="flex items-center justify-between p-3.5 bg-gray-50/50 dark:bg-gray-800/50 rounded-2xl border border-gray-100 dark:border-gray-700">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-white dark:bg-gray-800 rounded-lg flex items-center justify-center text-blue-600 dark:text-blue-400 shadow-sm">
-                            <UserIcon size={16} />
+                {isAdmin?.canEditAdmins && !editingAdmin && (
+                  <div className="space-y-3">
+                    <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Administradores Atuais</p>
+                    <div className="grid gap-2">
+                      {admins.map(admin => (
+                        <div key={admin.id} className="flex items-center justify-between p-3.5 bg-gray-50/50 dark:bg-gray-800/50 rounded-2xl border border-gray-100 dark:border-gray-700">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-white dark:bg-gray-800 rounded-xl flex items-center justify-center text-blue-600 dark:text-blue-400 shadow-sm overflow-hidden border border-gray-100 dark:border-gray-700">
+                              {admin.photo ? (
+                                <img src={admin.photo} alt={admin.username} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                              ) : (
+                                <UserIcon size={18} />
+                              )}
+                            </div>
+                            <span className="font-bold text-gray-700 dark:text-gray-200 text-sm md:text-base">{admin.username}</span>
                           </div>
-                          <span className="font-bold text-gray-700 dark:text-gray-200 text-sm md:text-base">{admin.username}</span>
+                          <div className="flex items-center gap-1">
+                            <button 
+                              onClick={() => {
+                                setEditingAdmin(admin);
+                                setTempAdminPhoto(admin.photo || "");
+                              }}
+                              className="text-blue-400 hover:text-blue-600 p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-xl transition-all"
+                            >
+                              <Edit size={18} />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteAdmin(admin.id)}
+                              className="text-red-400 hover:text-red-600 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
                         </div>
-                        <button 
-                          onClick={() => handleDeleteAdmin(admin.id)}
-                          className="text-red-400 hover:text-red-600 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all"
-                        >
-                          <Trash2 size={18} />
-                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(!isAdmin?.canEditAdmins || editingAdmin) && (
+                  <form onSubmit={handleSaveAdmin} className="space-y-5 pt-2">
+                    <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">
+                      {editingAdmin ? "Dados do Administrador" : (isAdmin?.canEditAdmins ? "Adicionar Novo Admin" : "Meu Perfil")}
+                    </p>
+                    
+                    <div className="flex flex-col items-center gap-4 mb-6">
+                      <div className="relative group">
+                        <div className="w-24 h-24 bg-gray-50 dark:bg-gray-800 rounded-3xl border-2 border-dashed border-gray-200 dark:border-gray-700 flex items-center justify-center overflow-hidden transition-all hover:border-blue-400 hover:bg-blue-50/30">
+                          {(tempAdminPhoto || (editingAdmin?.photo || (!isAdmin?.canEditAdmins ? isAdmin?.photo : ""))) ? (
+                            <img src={tempAdminPhoto || editingAdmin?.photo || (!isAdmin?.canEditAdmins ? isAdmin?.photo : "")} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          ) : (
+                            <UserIcon size={32} strokeWidth={1.5} className="text-gray-300 dark:text-gray-600" />
+                          )}
+                          <label className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
+                            <Upload size={20} className="text-white" />
+                            <input 
+                              type="file" 
+                              accept="image/*" 
+                              className="hidden" 
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const base64 = await fileToBase64(file);
+                                  setTempAdminPhoto(base64);
+                                }
+                              }}
+                            />
+                          </label>
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-                
-                <form onSubmit={handleSaveAdmin} className="space-y-5 pt-6 border-t border-gray-100 dark:border-gray-800">
-                  <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Adicionar Novo Admin</p>
-                  <div className="space-y-4">
-                    <div className="space-y-1.5">
-                      <label className="block text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Usuário</label>
-                      <input 
-                        name="username" 
-                        required 
-                        className="w-full px-4 py-3.5 rounded-2xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 focus:bg-white dark:focus:bg-gray-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 outline-none transition-all text-sm md:text-base font-medium text-gray-800 dark:text-gray-100" 
-                        placeholder="Nome de usuário"
-                      />
+                      <div className="w-full relative group">
+                        <input 
+                          name="photo" 
+                          value={tempAdminPhoto || (editingAdmin?.photo || (!isAdmin?.canEditAdmins ? isAdmin?.photo : ""))} 
+                          onChange={(e) => setTempAdminPhoto(e.target.value)}
+                          className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 focus:bg-white dark:focus:bg-gray-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 outline-none transition-all text-xs font-medium text-gray-800 dark:text-gray-100" 
+                          placeholder="Ou cole a URL da foto"
+                        />
+                        <ImageIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 group-focus-within:text-blue-600 transition-colors" size={16} />
+                      </div>
                     </div>
-                    <div className="space-y-1.5">
-                      <label className="block text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Senha</label>
-                      <input 
-                        type="password" 
-                        name="password" 
-                        required 
-                        className="w-full px-4 py-3.5 rounded-2xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 focus:bg-white dark:focus:bg-gray-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 outline-none transition-all text-sm md:text-base font-medium text-gray-800 dark:text-gray-100" 
-                        placeholder="Senha de acesso"
-                      />
+
+                    <div className="space-y-4">
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Usuário</label>
+                        <input 
+                          name="username" 
+                          defaultValue={editingAdmin?.username || (!isAdmin?.canEditAdmins ? isAdmin?.username : "")}
+                          required 
+                          disabled={!isAdmin?.canEditAdmins}
+                          className="w-full px-4 py-3.5 rounded-2xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 focus:bg-white dark:focus:bg-gray-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 outline-none transition-all text-sm md:text-base font-medium text-gray-800 dark:text-gray-100 disabled:opacity-50" 
+                          placeholder="Nome de usuário"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Senha {(editingAdmin || !isAdmin?.canEditAdmins) && "(deixe em branco para manter)"}</label>
+                        <input 
+                          type="password" 
+                          name="password" 
+                          required={!editingAdmin && isAdmin?.canEditAdmins}
+                          className="w-full px-4 py-3.5 rounded-2xl border border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50 focus:bg-white dark:focus:bg-gray-800 focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 outline-none transition-all text-sm md:text-base font-medium text-gray-800 dark:text-gray-100" 
+                          placeholder={(editingAdmin || !isAdmin?.canEditAdmins) ? "Nova senha" : "Senha de acesso"}
+                        />
+                      </div>
+                      {isAdmin?.canEditAdmins && (
+                        <div className="flex items-center gap-3 p-3.5 bg-gray-50/50 dark:bg-gray-800/50 rounded-2xl border border-gray-100 dark:border-gray-700">
+                          <input 
+                            type="checkbox" 
+                            name="canEditAdmins" 
+                            id="canEditAdmins"
+                            defaultChecked={editingAdmin?.canEditAdmins || false}
+                            className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-600"
+                          />
+                          <label htmlFor="canEditAdmins" className="text-sm font-medium text-gray-700 dark:text-gray-200 cursor-pointer">
+                            Pode gerenciar outros administradores
+                          </label>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  <div className="pt-2 flex flex-col gap-3">
-                    <button 
-                      type="submit" 
-                      className="w-full bg-blue-600 text-white font-bold py-4 rounded-2xl shadow-xl shadow-blue-600/20 hover:bg-blue-700 transition-all active:scale-[0.98] text-sm md:text-base flex items-center justify-center gap-2"
-                    >
-                      <UserPlus size={18} />
-                      Adicionar Administrador
-                    </button>
-                    <button 
-                      type="button"
-                      onClick={() => setShowAdminModal(false)}
-                      className="w-full bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-bold py-4 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-all text-sm md:text-base sm:hidden"
-                    >
-                      Cancelar
-                    </button>
-                  </div>
-                </form>
+                    <div className="pt-2 flex flex-col gap-3">
+                      <button 
+                        type="submit" 
+                        className="w-full bg-blue-600 text-white font-bold py-4 rounded-2xl shadow-xl shadow-blue-600/20 hover:bg-blue-700 transition-all active:scale-[0.98] text-sm md:text-base flex items-center justify-center gap-2"
+                      >
+                        {(editingAdmin || !isAdmin?.canEditAdmins) ? <RefreshCw size={18} /> : <UserPlus size={18} />}
+                        {(editingAdmin || !isAdmin?.canEditAdmins) ? "Salvar Alterações" : "Adicionar Administrador"}
+                      </button>
+                      {editingAdmin && isAdmin?.canEditAdmins && (
+                        <button 
+                          type="button"
+                          onClick={() => { setEditingAdmin(null); setTempAdminPhoto(""); }}
+                          className="w-full bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-bold py-4 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-all text-sm md:text-base"
+                        >
+                          Cancelar Edição
+                        </button>
+                      )}
+                      <button 
+                        type="button"
+                        onClick={() => { setShowAdminModal(false); setEditingAdmin(null); setTempAdminPhoto(""); }}
+                        className="w-full bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-bold py-4 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-all text-sm md:text-base sm:hidden"
+                      >
+                        Fechar
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             </motion.div>
           </div>
@@ -1722,17 +1940,19 @@ const AdminPanel = () => {
 export default function App() {
   return (
     <ErrorBoundary>
-      <AuthProvider>
-        <Toaster position="top-center" richColors />
-        <Router>
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/admin" element={<AdminPanel />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Router>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <Toaster position="top-center" richColors />
+          <Router>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/admin" element={<AdminPanel />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Router>
+        </AuthProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }
