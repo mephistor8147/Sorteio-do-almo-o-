@@ -181,6 +181,20 @@ export const subscribeHistory = (callback: (history: SortHistory[]) => void, onE
   });
 };
 
+export const clearHistory = async () => {
+  const path = COLLECTIONS.HISTORY;
+  try {
+    const querySnapshot = await getDocs(collection(db, path));
+    const batch = writeBatch(db);
+    querySnapshot.docs.forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+};
+
 // --- Current Order ---
 
 export const getCurrentOrder = async (): Promise<string[]> => {

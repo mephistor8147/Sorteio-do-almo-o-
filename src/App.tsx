@@ -53,7 +53,8 @@ import {
   subscribeConfig,
   subscribeCurrentOrder,
   subscribeAdmins,
-  checkIsAdmin
+  checkIsAdmin,
+  clearHistory
 } from "./store";
 import { auth, onAuthStateChanged, signIn, logout } from "./firebase";
 import { Employee, SortHistory, AppConfig, AdminUser } from "./types";
@@ -103,7 +104,7 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
 // --- Utils ---
 
-const fileToBase64 = (file: File, maxWidth = 200, maxHeight = 200): Promise<string> => {
+const fileToBase64 = (file: File, maxWidth = 128, maxHeight = 128, quality = 0.6): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -133,7 +134,7 @@ const fileToBase64 = (file: File, maxWidth = 200, maxHeight = 200): Promise<stri
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         ctx?.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", 0.7));
+        resolve(canvas.toDataURL("image/jpeg", quality));
       };
       img.onerror = (error) => reject(error);
     };
@@ -251,11 +252,26 @@ const ThemeToggle = () => {
   return (
     <button
       onClick={toggleTheme}
-      className="p-2 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+      className="p-2 rounded-xl bg-white/80 dark:bg-gray-800/80 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all shadow-sm border border-gray-200 dark:border-gray-700"
       title={isDark ? "Mudar para modo claro" : "Mudar para modo escuro"}
     >
       {isDark ? <Sun size={18} /> : <Moon size={18} />}
     </button>
+  );
+};
+
+const TopBar = () => {
+  return (
+    <div className="absolute top-4 right-4 z-50 flex items-center gap-3">
+      <ThemeToggle />
+      <Link 
+        to="/login" 
+        className="p-2 rounded-xl bg-white/80 dark:bg-gray-800/80 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all shadow-sm border border-gray-200 dark:border-gray-700"
+        title="Painel Administrativo"
+      >
+        <Settings size={18} />
+      </Link>
+    </div>
   );
 };
 
@@ -264,6 +280,7 @@ const Banner = ({ config }: { config: AppConfig }) => (
     className="relative w-full h-[25vh] bg-cover bg-center flex items-center justify-center overflow-hidden"
     style={{ backgroundImage: `url(${config.bannerUrl})` }}
   >
+    <TopBar />
     <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
     <div className="relative z-10 flex flex-col items-center gap-4 px-6 text-center">
       <img 
@@ -271,6 +288,7 @@ const Banner = ({ config }: { config: AppConfig }) => (
         alt="Logo" 
         className="w-16 h-16 md:w-24 md:h-24 rounded-full border-4 border-white shadow-xl object-cover"
         referrerPolicy="no-referrer"
+        loading="lazy"
       />
       <h1 className="text-2xl md:text-4xl font-bold text-white drop-shadow-lg tracking-tight">
         {config.title}
@@ -318,14 +336,22 @@ const EmployeeCard = ({ employee, index, stats }: { employee: Employee; index: n
     >
       <div className="flex-shrink-0 w-12 h-12 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-500 dark:text-gray-400 font-bold text-lg overflow-hidden border-2 border-blue-500/20">
         {employee.photo ? (
-          <img src={employee.photo} alt={employee.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          <img 
+            src={employee.photo} 
+            alt={employee.name} 
+            className="w-full h-full object-cover" 
+            referrerPolicy="no-referrer" 
+            loading="lazy"
+          />
         ) : (
           employee.name.charAt(0)
         )}
       </div>
       <div className="flex-grow">
         <div className="flex items-center gap-2">
-          <h3 className="font-semibold text-gray-800 dark:text-gray-100">{employee.name}</h3>
+          <h3 className={cn("font-semibold text-gray-800 dark:text-gray-100", index < 5 && "text-red-600 dark:text-red-500")}>
+            {employee.name}
+          </h3>
           {trophyColor && <Trophy size={16} className={trophyColor} />}
         </div>
         <div className="flex items-center gap-3">
@@ -427,6 +453,7 @@ const Home = () => {
   const [error, setError] = useState<any>(null);
   const notifiedRef = useRef<string | null>(null);
   const [showFullRanking, setShowFullRanking] = useState(false);
+  const [showFullQueue, setShowFullQueue] = useState(false);
 
   useEffect(() => {
     // Real-time listeners via local store subscriptions
@@ -565,75 +592,88 @@ const Home = () => {
               Fila Atual
             </h2>
             <div className="flex items-center gap-4">
-              <ThemeToggle />
               {sessionStorage.getItem("is_admin") === "true" && (
                 <button 
                   onClick={() => {
-                    // We need handlePrint here, but it's defined in AdminPanel.
-                    // Let's move it to a shared utility or duplicate it for now.
-                    // Actually, let's just use a custom print logic for Home.
+                    const sorted = order
+                      .map(id => employees.find(e => e.id === id))
+                      .filter((e): e is Employee => !!e);
+                    
+                    const midPoint = Math.ceil(sorted.length / 2);
+                    const leftColumn = sorted.slice(0, midPoint);
+                    const rightColumn = sorted.slice(midPoint);
+
+                    const renderTable = (items: Employee[], startIdx: number) => `
+                      <table>
+                        <thead><tr><th style="width: 40px; text-align: center;">#</th><th>Nome</th></tr></thead>
+                        <tbody>
+                          ${items.map((e, index) => `
+                            <tr>
+                              <td style="border: 1px solid #ddd; padding: 6px 10px; text-align: center; font-weight: bold; width: 40px;">${startIdx + index + 1}</td>
+                              <td style="border: 1px solid #ddd; padding: 6px 10px;">${e.name}</td>
+                            </tr>
+                          `).join("")}
+                        </tbody>
+                      </table>
+                    `;
+
+                    const html = `
+                      <!DOCTYPE html>
+                      <html>
+                        <head>
+                          <title>Fila do Almoço - ${config.title}</title>
+                          <style>
+                            @page { size: auto; margin: 10mm; }
+                            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 0; color: #333; margin: 0; }
+                            .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #3b82f6; padding-bottom: 15px; margin-bottom: 20px; }
+                            .header h1 { margin: 0; color: #1e40af; font-size: 20px; }
+                            .header-info { text-align: right; }
+                            .container { display: grid; grid-template-columns: ${sorted.length > 25 ? '1fr 1fr' : '1fr'}; gap: 20px; }
+                            table { width: 100%; border-collapse: collapse; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+                            th { background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 8px; text-align: left; color: #1e40af; font-weight: bold; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
+                            td { border: 1px solid #e5e7eb; padding: 6px 10px; font-size: 13px; }
+                            tr:nth-child(even) { background-color: #f9fafb; }
+                          </style>
+                        </head>
+                        <body>
+                          <div class="header">
+                            <div>
+                              <h1>${config.title}</h1>
+                              <p style="margin: 3px 0 0 0; color: #6b7280; font-size: 14px; font-weight: 500;">Fila de Almoço Atual</p>
+                            </div>
+                            <div class="header-info">
+                              <p style="margin: 0; font-size: 14px; font-weight: bold;">Data: ${new Date().toLocaleDateString('pt-BR')}</p>
+                              <p style="margin: 3px 0 0 0; font-size: 12px; color: #6b7280;">Total: ${sorted.length} funcionários</p>
+                            </div>
+                          </div>
+                          <div class="container">
+                            ${renderTable(leftColumn, 0)}
+                            ${sorted.length > 25 ? renderTable(rightColumn, midPoint) : ''}
+                          </div>
+                          <script>window.onload = () => { setTimeout(() => { window.print(); window.close(); }, 500); };</script>
+                        </body>
+                      </html>
+                    `;
+
                     const printWindow = window.open("", "_blank");
                     if (printWindow) {
-                      const sorted = order
-                        .map(id => employees.find(e => e.id === id))
-                        .filter((e): e is Employee => !!e);
-                      
-                      const midPoint = Math.ceil(sorted.length / 2);
-                      const leftColumn = sorted.slice(0, midPoint);
-                      const rightColumn = sorted.slice(midPoint);
-
-                      const renderTable = (items: Employee[], startIdx: number) => `
-                        <table>
-                          <thead><tr><th style="width: 40px; text-align: center;">#</th><th>Nome</th></tr></thead>
-                          <tbody>
-                            ${items.map((e, index) => `
-                              <tr>
-                                <td style="border: 1px solid #ddd; padding: 6px 10px; text-align: center; font-weight: bold; width: 40px;">${startIdx + index + 1}</td>
-                                <td style="border: 1px solid #ddd; padding: 6px 10px;">${e.name}</td>
-                              </tr>
-                            `).join("")}
-                          </tbody>
-                        </table>
-                      `;
-
-                      printWindow.document.write(`
-                        <!DOCTYPE html>
-                        <html>
-                          <head>
-                            <title>Fila do Almoço - ${config.title}</title>
-                            <style>
-                              @page { size: auto; margin: 10mm; }
-                              body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 0; color: #333; margin: 0; }
-                              .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #3b82f6; padding-bottom: 15px; margin-bottom: 20px; }
-                              .header h1 { margin: 0; color: #1e40af; font-size: 20px; }
-                              .header-info { text-align: right; }
-                              .container { display: grid; grid-template-columns: ${sorted.length > 25 ? '1fr 1fr' : '1fr'}; gap: 20px; }
-                              table { width: 100%; border-collapse: collapse; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-                              th { background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 8px; text-align: left; color: #1e40af; font-weight: bold; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
-                              td { border: 1px solid #e5e7eb; padding: 6px 10px; font-size: 13px; }
-                              tr:nth-child(even) { background-color: #f9fafb; }
-                            </style>
-                          </head>
-                          <body>
-                            <div class="header">
-                              <div>
-                                <h1>${config.title}</h1>
-                                <p style="margin: 3px 0 0 0; color: #6b7280; font-size: 14px; font-weight: 500;">Fila de Almoço Atual</p>
-                              </div>
-                              <div class="header-info">
-                                <p style="margin: 0; font-size: 14px; font-weight: bold;">Data: ${new Date().toLocaleDateString('pt-BR')}</p>
-                                <p style="margin: 3px 0 0 0; font-size: 12px; color: #6b7280;">Total: ${sorted.length} funcionários</p>
-                              </div>
-                            </div>
-                            <div class="container">
-                              ${renderTable(leftColumn, 0)}
-                              ${sorted.length > 25 ? renderTable(rightColumn, midPoint) : ''}
-                            </div>
-                            <script>window.onload = () => { setTimeout(() => { window.print(); window.close(); }, 500); };</script>
-                          </body>
-                        </html>
-                      `);
+                      printWindow.document.write(html);
                       printWindow.document.close();
+                    } else {
+                      const iframe = document.createElement('iframe');
+                      iframe.style.display = 'none';
+                      document.body.appendChild(iframe);
+                      const doc = iframe.contentWindow?.document;
+                      if (doc) {
+                        doc.open();
+                        doc.write(html);
+                        doc.close();
+                        iframe.contentWindow?.focus();
+                        iframe.contentWindow?.print();
+                        setTimeout(() => {
+                          document.body.removeChild(iframe);
+                        }, 1000);
+                      }
                     }
                   }}
                   className="text-sm font-medium text-gray-400 hover:text-blue-600 transition-colors flex items-center gap-1"
@@ -643,13 +683,6 @@ const Home = () => {
                   Imprimir
                 </button>
               )}
-              <Link 
-                to="/login" 
-                className="text-sm font-medium text-gray-400 hover:text-blue-600 transition-colors flex items-center gap-1"
-              >
-                <Settings size={16} />
-                Admin
-              </Link>
             </div>
           </div>
 
@@ -689,11 +722,19 @@ const Home = () => {
                   <Users className="text-blue-600 dark:text-blue-400" size={20} />
                   <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest">Fila do Almoço</h3>
                 </div>
-                <span className="text-[10px] font-bold text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-lg uppercase">
-                  {sortedEmployees.length} Pessoas
-                </span>
+                <div className="flex items-center gap-3">
+                  <button 
+                    onClick={() => setShowFullQueue(!showFullQueue)}
+                    className="text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-2 py-1 rounded-lg uppercase hover:underline"
+                  >
+                    {showFullQueue ? "Ver Menos" : "Ver Todos"}
+                  </button>
+                  <span className="text-[10px] font-bold text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-lg uppercase">
+                    {sortedEmployees.length} Pessoas
+                  </span>
+                </div>
               </div>
-              {sortedEmployees.map((employee, idx) => (
+              {(showFullQueue ? sortedEmployees : sortedEmployees.slice(0, 10)).map((employee, idx) => (
                 <EmployeeCard 
                   key={employee.id} 
                   employee={employee} 
@@ -724,18 +765,18 @@ const Home = () => {
                 </button>
               </div>
               
-              <div className="grid gap-4">
-                {(showFullRanking ? historicalRanking : historicalRanking.slice(0, 3)).map((emp, idx) => (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {(showFullRanking ? historicalRanking : historicalRanking.slice(0, 4)).map((emp, idx) => (
                   <motion.div
                     key={emp.id}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: idx * 0.1 }}
-                    className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm flex items-center justify-between gap-4"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: idx * 0.05 }}
+                    className="bg-white dark:bg-gray-800 p-3 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm flex items-center justify-between gap-3"
                   >
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-3 overflow-hidden">
                       <div className={cn(
-                        "w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg",
+                        "w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm flex-shrink-0",
                         idx === 0 ? "bg-yellow-100 text-yellow-700" : 
                         idx === 1 ? "bg-gray-100 text-gray-700" :
                         idx === 2 ? "bg-amber-100 text-amber-700" :
@@ -743,29 +784,35 @@ const Home = () => {
                       )}>
                         {idx + 1}º
                       </div>
-                      <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-gray-100 dark:border-gray-700">
+                      <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-gray-100 dark:border-gray-700 flex-shrink-0">
                         {emp.photo ? (
-                          <img src={emp.photo} alt={emp.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          <img 
+                            src={emp.photo} 
+                            alt={emp.name} 
+                            className="w-full h-full object-cover" 
+                            referrerPolicy="no-referrer" 
+                            loading="lazy"
+                          />
                         ) : (
-                          <div className="w-full h-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-500 font-bold">
+                          <div className="w-full h-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-500 font-bold text-xs">
                             {emp.name.charAt(0)}
                           </div>
                         )}
                       </div>
-                      <div>
-                        <h4 className="font-bold text-gray-800 dark:text-gray-100">{emp.name}</h4>
-                        <p className="text-xs text-gray-400">Total de sorteios: {emp.stats.total}</p>
+                      <div className="min-w-0">
+                        <h4 className="font-bold text-gray-800 dark:text-gray-100 text-sm truncate">{emp.name}</h4>
+                        <p className="text-[10px] text-gray-400 truncate">Sorteios: {emp.stats.total}</p>
                       </div>
                     </div>
                     
-                    <div className="flex gap-2">
-                      <div className="text-center px-3 py-1 bg-yellow-50 dark:bg-yellow-900/20 rounded-xl border border-yellow-100 dark:border-yellow-900/30">
-                        <p className="text-[10px] font-bold text-yellow-600 dark:text-yellow-400 uppercase">1º Lugar</p>
-                        <p className="text-sm font-black text-yellow-700 dark:text-yellow-300">{emp.stats.top1}</p>
+                    <div className="flex gap-1.5 flex-shrink-0">
+                      <div className="text-center px-2 py-0.5 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-100 dark:border-yellow-900/30">
+                        <p className="text-[8px] font-bold text-yellow-600 dark:text-yellow-400 uppercase">1º</p>
+                        <p className="text-xs font-black text-yellow-700 dark:text-yellow-300">{emp.stats.top1}</p>
                       </div>
-                      <div className="text-center px-3 py-1 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-900/30">
-                        <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase">Top 3</p>
-                        <p className="text-sm font-black text-blue-700 dark:text-blue-300">{emp.stats.top3}</p>
+                      <div className="text-center px-2 py-0.5 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-900/30">
+                        <p className="text-[8px] font-bold text-blue-600 dark:text-blue-400 uppercase">T3</p>
+                        <p className="text-xs font-black text-blue-700 dark:text-blue-300">{emp.stats.top3}</p>
                       </div>
                     </div>
                   </motion.div>
@@ -950,11 +997,74 @@ const Login = () => {
   );
 };
 
+// --- Components ---
+
+const ConfirmModal = ({ 
+  isOpen, 
+  onClose, 
+  onConfirm, 
+  onCancel,
+  title, 
+  message, 
+  confirmText = "Confirmar", 
+  cancelText = "Cancelar",
+  isDestructive = false
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  onConfirm: () => void; 
+  onCancel?: () => void;
+  title: string; 
+  message: string; 
+  confirmText?: string; 
+  cancelText?: string;
+  isDestructive?: boolean;
+}) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white dark:bg-gray-900 rounded-3xl p-6 w-full max-w-sm shadow-2xl border border-gray-100 dark:border-gray-800 relative"
+      >
+        <button 
+          onClick={onClose}
+          className="absolute top-4 right-4 p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+        >
+          <X size={20} />
+        </button>
+        <h3 className="text-xl font-bold text-gray-800 dark:text-gray-100 mb-2">{title}</h3>
+        <p className="text-gray-600 dark:text-gray-400 mb-6">{message}</p>
+        <div className="flex gap-3">
+          <button 
+            onClick={() => { if (onCancel) onCancel(); onClose(); }}
+            className="flex-1 py-3 px-4 rounded-2xl font-bold text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          >
+            {cancelText}
+          </button>
+          <button 
+            onClick={() => { onConfirm(); onClose(); }}
+            className={cn(
+              "flex-1 py-3 px-4 rounded-2xl font-bold text-white transition-all shadow-lg",
+              isDestructive ? "bg-red-600 hover:bg-red-700 shadow-red-500/20" : "bg-blue-600 hover:bg-blue-700 shadow-blue-500/20"
+            )}
+          >
+            {confirmText}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
 const AdminPanel = () => {
   const { user, isAdmin, loading: authLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<"employees" | "history" | "config">("employees");
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [history, setHistory] = useState<SortHistory[]>([]);
+  const [order, setOrder] = useState<string[]>([]);
   const [showMenu, setShowMenu] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
@@ -973,6 +1083,22 @@ const AdminPanel = () => {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    onCancel?: () => void;
+    confirmText?: string;
+    cancelText?: string;
+    isDestructive?: boolean;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: () => {},
+  });
 
   if (error) throw error;
 
@@ -1008,11 +1134,16 @@ const AdminPanel = () => {
       setAdmins(data);
     }, (err: any) => setError(err));
 
+    const unsubscribeOrder = subscribeCurrentOrder((data) => {
+      setOrder(data);
+    }, (err: any) => setError(err));
+
     return () => {
       unsubscribeEmployees();
       unsubscribeHistory();
       unsubscribeConfig();
       unsubscribeAdmins();
+      unsubscribeOrder();
     };
   }, [isAdmin, authLoading]);
 
@@ -1027,9 +1158,31 @@ const AdminPanel = () => {
       toast.error("Adicione funcionários antes de realizar um sorteio.");
       return;
     }
-    await performNewSort("Admin");
-    toast.success("Novo sorteio realizado com sucesso!");
-    navigate("/");
+
+    setConfirmModal({
+      isOpen: true,
+      title: "Realizar Novo Sorteio?",
+      message: "Isso irá gerar uma nova fila aleatória e atualizar a ordem para todos os usuários. Deseja continuar?",
+      confirmText: "Sortear Agora",
+      cancelText: "Cancelar",
+      isDestructive: false,
+      onConfirm: async () => {
+        const adminName = isAdmin?.username || "Administrador";
+        await performNewSort(adminName);
+        
+        // Fun celebratory effect
+        confetti({
+          particleCount: 150,
+          spread: 70,
+          origin: { y: 0.6 },
+          colors: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'],
+          zIndex: 100
+        });
+
+        toast.success("Novo sorteio realizado com sucesso!");
+        navigate("/");
+      }
+    });
   };
 
   const handleDeleteEmployee = async (id: string) => {
@@ -1065,36 +1218,49 @@ const AdminPanel = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const data = new Uint8Array(event.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: "array" });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet) as any[];
+    const processImport = async (clearFirst: boolean) => {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const data = new Uint8Array(event.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: "array" });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const jsonData = XLSX.utils.sheet_to_json(worksheet) as any[];
 
-        if (Array.isArray(jsonData)) {
-          if (window.confirm("Deseja limpar a lista atual antes de importar?")) {
-            await clearEmployees();
+          if (Array.isArray(jsonData)) {
+            if (clearFirst) {
+              await clearEmployees();
+            }
+
+            const newEmployees: Employee[] = jsonData.map((item: any) => ({
+              id: item.id || crypto.randomUUID(),
+              name: item.name || item.Nome || "Sem Nome",
+              photo: item.photo || item.Foto || "",
+              active: item.active !== undefined ? item.active : (item.Ativo !== undefined ? item.Ativo : true)
+            }));
+
+            await saveEmployees(newEmployees);
+            toast.success("Lista importada com sucesso!");
+            setShowMenu(false);
           }
-
-          const newEmployees: Employee[] = jsonData.map((item: any) => ({
-            id: item.id || crypto.randomUUID(),
-            name: item.name || item.Nome || "Sem Nome",
-            photo: item.photo || item.Foto || "",
-            active: item.active !== undefined ? item.active : (item.Ativo !== undefined ? item.Ativo : true)
-          }));
-
-          await saveEmployees(newEmployees);
-          toast.success("Lista importada com sucesso!");
+        } catch (err) {
+          console.error(err);
+          toast.error("Erro ao importar arquivo.");
         }
-      } catch (err) {
-        console.error(err);
-        toast.error("Erro ao importar arquivo.");
-      }
+      };
+      reader.readAsArrayBuffer(file);
     };
-    reader.readAsArrayBuffer(file);
+
+    setConfirmModal({
+      isOpen: true,
+      title: "Importar Funcionários",
+      message: "Deseja limpar a lista atual antes de importar os novos funcionários?",
+      confirmText: "Sim, limpar",
+      cancelText: "Não, manter",
+      onConfirm: () => processImport(true),
+      onCancel: () => processImport(false),
+    });
   };
 
   const handleExport = () => {
@@ -1131,20 +1297,70 @@ const AdminPanel = () => {
     a.click();
   };
 
-  const handleClearList = async () => {
-    if (window.confirm("Tem certeza que deseja limpar toda a lista?")) {
-      await clearEmployees();
-      toast.success("Lista de funcionários limpa.");
+  const handleClearList = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: "Limpar Lista?",
+      message: "Tem certeza que deseja limpar toda a lista de funcionários? Esta ação não pode ser desfeita.",
+      isDestructive: true,
+      onConfirm: async () => {
+        await clearEmployees();
+        toast.success("Lista de funcionários limpa.");
+        setShowMenu(false);
+      }
+    });
+  };
+
+  const handleClearHistory = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: "Limpar Histórico?",
+      message: "Tem certeza que deseja limpar todo o histórico de sorteios? Esta ação não pode ser desfeita.",
+      isDestructive: true,
+      onConfirm: async () => {
+        await clearHistory();
+        toast.success("Histórico de sorteios limpo.");
+        setShowMenu(false);
+      }
+    });
+  };
+
+  const handleDownloadExcel = (historyEntry?: SortHistory) => {
+    let data: any[] = [];
+    let filename = "fila-almoco-atual.xlsx";
+
+    if (historyEntry) {
+      data = historyEntry.order
+        .map((id, idx) => {
+          const emp = employees.find(e => e.id === id);
+          return {
+            "Posição": idx + 1,
+            "Nome": emp ? emp.name : "Funcionário Removido",
+            "Data": new Date(historyEntry.date).toLocaleString('pt-BR')
+          };
+        });
+      filename = `sorteio-${new Date(historyEntry.date).toISOString().split('T')[0]}.xlsx`;
+    } else {
+      const currentList = order.length > 0 
+        ? order.map(id => employees.find(e => e.id === id)).filter(e => !!e)
+        : (history.length > 0 
+          ? history[0].order.map(id => employees.find(e => e.id === id)).filter(e => !!e)
+          : employees.filter(e => e.active));
+      
+      data = currentList.map((emp, idx) => ({
+        "Posição": idx + 1,
+        "Nome": emp?.name || "Funcionário Removido",
+        "Data": new Date().toLocaleString('pt-BR')
+      }));
     }
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Fila");
+    XLSX.writeFile(wb, filename);
   };
 
   const handlePrint = (historyEntry?: SortHistory) => {
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) {
-      toast.error("O bloqueador de pop-ups impediu a impressão. Por favor, permita pop-ups para este site.");
-      return;
-    }
-
     let listToPrint: { name: string }[] = [];
     let printDate = new Date().toLocaleDateString('pt-BR');
     let subtitle = "Lista de Controle de Almoço";
@@ -1155,6 +1371,19 @@ const AdminPanel = () => {
         .filter(e => !!e)
         .map(e => ({ name: e!.name }));
       printDate = new Date(historyEntry.date).toLocaleDateString('pt-BR');
+      subtitle = `Sorteio realizado em ${printDate}`;
+    } else if (order.length > 0) {
+      listToPrint = order
+        .map(id => employees.find(e => e.id === id))
+        .filter(e => !!e)
+        .map(e => ({ name: e!.name }));
+    } else if (history.length > 0) {
+      const latest = history[0];
+      listToPrint = latest.order
+        .map(id => employees.find(e => e.id === id))
+        .filter(e => !!e)
+        .map(e => ({ name: e!.name }));
+      printDate = new Date(latest.date).toLocaleDateString('pt-BR');
       subtitle = `Sorteio realizado em ${printDate}`;
     } else {
       listToPrint = employees.filter(e => e.active).map(e => ({ name: e.name }));
@@ -1224,8 +1453,29 @@ const AdminPanel = () => {
       </html>
     `;
 
-    printWindow.document.write(html);
-    printWindow.document.close();
+    const printWindow = window.open("", "_blank");
+    if (printWindow) {
+      printWindow.document.write(html);
+      printWindow.document.close();
+    } else {
+      // Fallback for blocked popups: use a hidden iframe
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      document.body.appendChild(iframe);
+      const doc = iframe.contentWindow?.document;
+      if (doc) {
+        doc.open();
+        doc.write(html);
+        doc.close();
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+        setTimeout(() => {
+          document.body.removeChild(iframe);
+        }, 1000);
+      } else {
+        toast.error("Erro ao abrir janela de impressão.");
+      }
+    }
     setShowMenu(false);
   };
 
@@ -1315,13 +1565,6 @@ const AdminPanel = () => {
               <RefreshCw size={16} />
               Novo Sorteio
             </button>
-            <button 
-              onClick={() => setShowConfigModal(true)}
-              className="hidden lg:flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-lg shadow-blue-600/20"
-            >
-              <Settings size={16} />
-              Personalizar App
-            </button>
             <div className="relative">
               <button 
                 onClick={() => setShowMenu(!showMenu)}
@@ -1356,6 +1599,9 @@ const AdminPanel = () => {
                       <button onClick={handleClearList} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 transition-colors text-sm font-medium">
                         <Trash2 size={18} /> Limpar Lista
                       </button>
+                      <button onClick={handleClearHistory} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 transition-colors text-sm font-medium">
+                        <History size={18} /> Limpar Histórico
+                      </button>
                       <div className="h-px bg-gray-100 dark:bg-gray-800 my-2" />
                       <button onClick={handleDownloadDB} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
                         <Download size={18} /> Baixar Banco de Dados
@@ -1372,9 +1618,6 @@ const AdminPanel = () => {
                       )}
                       <button onClick={() => { setShowAdminModal(true); setShowMenu(false); setIsAddingAdmin(false); setEditingAdmin(isAdmin); setTempAdminPhoto(isAdmin.photo || ""); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
                         <UserIcon size={18} /> Meu Perfil
-                      </button>
-                      <button onClick={() => { setShowConfigModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
-                        <Settings size={18} /> Personalizar App
                       </button>
                       <button 
                         onClick={() => {
@@ -1462,13 +1705,6 @@ const AdminPanel = () => {
                 <RefreshCw size={18} />
                 Novo Sorteio
               </button>
-              <button 
-                onClick={() => setShowConfigModal(true)}
-                className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-2xl font-bold shadow-lg shadow-blue-600/20"
-              >
-                <Settings size={18} />
-                Personalizar App
-              </button>
             </div>
 
             {employees.length > 0 ? (
@@ -1477,7 +1713,13 @@ const AdminPanel = () => {
                   <div key={emp.id} className="bg-white dark:bg-gray-800 p-3 md:p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-3 md:gap-4">
                     <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden flex-shrink-0 border border-gray-200 dark:border-gray-600">
                       {emp.photo ? (
-                        <img src={emp.photo} alt={emp.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        <img 
+                          src={emp.photo} 
+                          alt={emp.name} 
+                          className="w-full h-full object-cover" 
+                          referrerPolicy="no-referrer" 
+                          loading="lazy"
+                        />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-gray-400 dark:text-gray-500 font-bold text-sm md:text-base">
                           {emp.name.charAt(0)}
@@ -1543,15 +1785,24 @@ const AdminPanel = () => {
 
         {activeTab === "history" && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
               <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Histórico de Sorteios</h2>
-              <button 
-                onClick={handlePrint}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-lg shadow-blue-500/20"
-              >
-                <Printer size={16} />
-                Imprimir Lista Atual
-              </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => handlePrint()}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-lg shadow-blue-500/20"
+                >
+                  <Printer size={16} />
+                  Imprimir Lista Atual
+                </button>
+                <button 
+                  onClick={() => handleDownloadExcel()}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-500/20"
+                >
+                  <Download size={16} />
+                  Baixar Lista Atual
+                </button>
+              </div>
             </div>
             {history.length > 0 ? (
               <div className="grid gap-3 md:gap-4">
@@ -1574,13 +1825,22 @@ const AdminPanel = () => {
                         <div className="px-3 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-[10px] md:text-xs font-bold text-gray-500 dark:text-gray-400">
                           {entry.order.length} Pessoas
                         </div>
-                        <button 
-                          onClick={() => handlePrint(entry)}
-                          className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg transition-colors"
-                          title="Imprimir este sorteio"
-                        >
-                          <Printer size={16} />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button 
+                            onClick={() => handlePrint(entry)}
+                            className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg transition-colors"
+                            title="Imprimir este sorteio"
+                          >
+                            <Printer size={16} />
+                          </button>
+                          <button 
+                            onClick={() => handleDownloadExcel(entry)}
+                            className="p-2 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-lg transition-colors"
+                            title="Baixar Excel deste sorteio"
+                          >
+                            <Download size={16} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5 md:gap-2">
@@ -1664,7 +1924,12 @@ const AdminPanel = () => {
                   <div className="relative group">
                     <div className="w-24 h-24 md:w-28 md:h-28 rounded-full bg-gray-50 dark:bg-gray-800 border-2 border-dashed border-gray-200 dark:border-gray-700 flex items-center justify-center overflow-hidden transition-all group-hover:border-blue-400 group-hover:bg-blue-50/30">
                       {(tempPhoto || editingEmployee?.photo) ? (
-                        <img src={tempPhoto || editingEmployee?.photo} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        <img 
+                          src={tempPhoto || editingEmployee?.photo} 
+                          className="w-full h-full object-cover" 
+                          referrerPolicy="no-referrer" 
+                          loading="lazy"
+                        />
                       ) : (
                         <div className="flex flex-col items-center gap-1 text-gray-400 dark:text-gray-500">
                           <Camera size={32} strokeWidth={1.5} />
@@ -1828,7 +2093,7 @@ const AdminPanel = () => {
                               onChange={async (e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
-                                  const base64 = await fileToBase64(file, 1200, 400);
+                                  const base64 = await fileToBase64(file, 800, 300, 0.5);
                                   setTempBanner(base64);
                                 }
                               }}
@@ -1983,7 +2248,12 @@ const AdminPanel = () => {
                       <div className="relative group">
                         <div className="w-24 h-24 bg-gray-50 dark:bg-gray-800 rounded-3xl border-2 border-dashed border-gray-200 dark:border-gray-700 flex items-center justify-center overflow-hidden transition-all hover:border-blue-400 hover:bg-blue-50/30">
                           {(tempAdminPhoto || (editingAdmin?.photo || (!isAdmin?.canEditAdmins ? isAdmin?.photo : ""))) ? (
-                            <img src={tempAdminPhoto || editingAdmin?.photo || (!isAdmin?.canEditAdmins ? isAdmin?.photo : "")} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                            <img 
+                              src={tempAdminPhoto || editingAdmin?.photo || (!isAdmin?.canEditAdmins ? isAdmin?.photo : "")} 
+                              className="w-full h-full object-cover" 
+                              referrerPolicy="no-referrer" 
+                              loading="lazy"
+                            />
                           ) : (
                             <UserIcon size={32} strokeWidth={1.5} className="text-gray-300 dark:text-gray-600" />
                           )}
@@ -2085,6 +2355,18 @@ const AdminPanel = () => {
           </div>
         )}
       </AnimatePresence>
+
+      <ConfirmModal 
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={confirmModal.onCancel}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmText={confirmModal.confirmText}
+        cancelText={confirmModal.cancelText}
+        isDestructive={confirmModal.isDestructive}
+      />
     </div>
   );
 };
@@ -2094,7 +2376,7 @@ export default function App() {
     <ErrorBoundary>
       <ThemeProvider>
         <AuthProvider>
-          <Toaster position="top-center" richColors />
+          <Toaster position="top-center" richColors duration={5000} />
           <Router>
             <Routes>
               <Route path="/" element={<Home />} />
