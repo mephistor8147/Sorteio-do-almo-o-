@@ -599,7 +599,13 @@ const Home = () => {
                       .map(id => employees.find(e => e.id === id))
                       .filter((e): e is Employee => !!e);
                     
-                    const midPoint = Math.ceil(sorted.length / 2);
+                    if (sorted.length === 0) {
+                      toast.error("Não há dados para imprimir.");
+                      return;
+                    }
+
+                    const isTwoColumns = sorted.length > 25;
+                    const midPoint = isTwoColumns ? Math.ceil(sorted.length / 2) : sorted.length;
                     const leftColumn = sorted.slice(0, midPoint);
                     const rightColumn = sorted.slice(midPoint);
 
@@ -621,14 +627,14 @@ const Home = () => {
                       <!DOCTYPE html>
                       <html>
                         <head>
-                          <title>Fila do Almoço - ${config.title}</title>
+                          <title>Fila do Almoço - ${config?.title || "Fila do Almoço"}</title>
                           <style>
                             @page { size: auto; margin: 10mm; }
-                            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 0; color: #333; margin: 0; }
+                            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; color: #333; margin: 0; }
                             .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #3b82f6; padding-bottom: 15px; margin-bottom: 20px; }
                             .header h1 { margin: 0; color: #1e40af; font-size: 20px; }
                             .header-info { text-align: right; }
-                            .container { display: grid; grid-template-columns: ${sorted.length > 25 ? '1fr 1fr' : '1fr'}; gap: 20px; }
+                            .container { display: grid; grid-template-columns: ${isTwoColumns ? '1fr 1fr' : '1fr'}; gap: 20px; }
                             table { width: 100%; border-collapse: collapse; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
                             th { background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 8px; text-align: left; color: #1e40af; font-weight: bold; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
                             td { border: 1px solid #e5e7eb; padding: 6px 10px; font-size: 13px; }
@@ -638,7 +644,7 @@ const Home = () => {
                         <body>
                           <div class="header">
                             <div>
-                              <h1>${config.title}</h1>
+                              <h1>${config?.title || "Fila do Almoço"}</h1>
                               <p style="margin: 3px 0 0 0; color: #6b7280; font-size: 14px; font-weight: 500;">Fila de Almoço Atual</p>
                             </div>
                             <div class="header-info">
@@ -648,30 +654,46 @@ const Home = () => {
                           </div>
                           <div class="container">
                             ${renderTable(leftColumn, 0)}
-                            ${sorted.length > 25 ? renderTable(rightColumn, midPoint) : ''}
+                            ${isTwoColumns ? renderTable(rightColumn, midPoint) : ''}
                           </div>
-                          <script>window.onload = () => { setTimeout(() => { window.print(); window.close(); }, 500); };</script>
+                          <script>
+                            window.onload = () => { 
+                              setTimeout(() => { 
+                                window.print(); 
+                                if (window.name === "print_popup") {
+                                  window.close(); 
+                                }
+                              }, 500); 
+                            };
+                          </script>
                         </body>
                       </html>
                     `;
 
-                    const printWindow = window.open("", "_blank");
+                    const printWindow = window.open("", "print_popup");
                     if (printWindow) {
                       printWindow.document.write(html);
                       printWindow.document.close();
                     } else {
                       const iframe = document.createElement('iframe');
-                      iframe.style.display = 'none';
+                      iframe.name = "print_iframe";
+                      iframe.style.position = 'absolute';
+                      iframe.style.width = '0';
+                      iframe.style.height = '0';
+                      iframe.style.border = 'none';
+                      iframe.style.visibility = 'hidden';
                       document.body.appendChild(iframe);
                       const doc = iframe.contentWindow?.document;
                       if (doc) {
                         doc.open();
                         doc.write(html);
                         doc.close();
-                        iframe.contentWindow?.focus();
-                        iframe.contentWindow?.print();
                         setTimeout(() => {
-                          document.body.removeChild(iframe);
+                          iframe.contentWindow?.focus();
+                          iframe.contentWindow?.print();
+                          setTimeout(() => {
+                            document.body.removeChild(iframe);
+                          }, 1000);
                         }, 1000);
                       }
                     }
@@ -1389,7 +1411,13 @@ const AdminPanel = () => {
       listToPrint = employees.filter(e => e.active).map(e => ({ name: e.name }));
     }
 
-    const midPoint = Math.ceil(listToPrint.length / 2);
+    if (listToPrint.length === 0) {
+      toast.error("Não há dados para imprimir.");
+      return;
+    }
+
+    const isTwoColumns = listToPrint.length > 25;
+    const midPoint = isTwoColumns ? Math.ceil(listToPrint.length / 2) : listToPrint.length;
     const leftColumn = listToPrint.slice(0, midPoint);
     const rightColumn = listToPrint.slice(midPoint);
 
@@ -1422,7 +1450,7 @@ const AdminPanel = () => {
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; color: #333; margin: 0; }
             h1 { text-align: center; margin-bottom: 5px; font-size: 24px; color: #1e40af; }
             h2 { text-align: center; font-weight: normal; font-size: 16px; margin-top: 0; margin-bottom: 20px; color: #666; }
-            .container { display: grid; grid-template-columns: ${listToPrint.length > 25 ? '1fr 1fr' : '1fr'}; gap: 20px; }
+            .container { display: grid; grid-template-columns: ${isTwoColumns ? '1fr 1fr' : '1fr'}; gap: 20px; }
             table { width: 100%; border-collapse: collapse; margin-top: 10px; }
             th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; font-size: 14px; }
             th { background-color: #f8fafc; color: #1e40af; font-weight: bold; text-transform: uppercase; font-size: 12px; }
@@ -1438,39 +1466,50 @@ const AdminPanel = () => {
           <h2>${subtitle}</h2>
           <div class="container">
             ${renderTable(leftColumn, 0)}
-            ${listToPrint.length > 25 ? renderTable(rightColumn, midPoint) : ''}
+            ${isTwoColumns ? renderTable(rightColumn, midPoint) : ''}
           </div>
           <div style="margin-top: 30px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 10px;">
             Documento gerado em ${new Date().toLocaleString('pt-BR')}
           </div>
           <script>
             window.onload = () => {
-              window.print();
-              setTimeout(() => { window.close(); }, 500);
+              setTimeout(() => {
+                window.print();
+                if (window.name === "print_popup") {
+                  window.close();
+                }
+              }, 500);
             };
           </script>
         </body>
       </html>
     `;
 
-    const printWindow = window.open("", "_blank");
+    const printWindow = window.open("", "print_popup");
     if (printWindow) {
       printWindow.document.write(html);
       printWindow.document.close();
     } else {
       // Fallback for blocked popups: use a hidden iframe
       const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
+      iframe.name = "print_iframe";
+      iframe.style.position = 'absolute';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = 'none';
+      iframe.style.visibility = 'hidden';
       document.body.appendChild(iframe);
       const doc = iframe.contentWindow?.document;
       if (doc) {
         doc.open();
         doc.write(html);
         doc.close();
-        iframe.contentWindow?.focus();
-        iframe.contentWindow?.print();
         setTimeout(() => {
-          document.body.removeChild(iframe);
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+          setTimeout(() => {
+            document.body.removeChild(iframe);
+          }, 1000);
         }, 1000);
       } else {
         toast.error("Erro ao abrir janela de impressão.");
