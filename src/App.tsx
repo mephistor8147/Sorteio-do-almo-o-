@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, Component, createContext, useContext } from "react";
+import React, { useState, useEffect, useRef, useMemo, Component, createContext, useContext } from "react";
 import { BrowserRouter as Router, Routes, Route, Link, useNavigate, Navigate } from "react-router-dom";
 import { 
   Plus, 
@@ -28,6 +28,7 @@ import {
   User as UserIcon
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import confetti from "canvas-confetti";
 import * as XLSX from "xlsx";
 import { toast, Toaster } from "sonner";
 import { cn } from "./lib/utils";
@@ -278,7 +279,7 @@ const Banner = ({ config }: { config: AppConfig }) => (
   </div>
 );
 
-const EmployeeCard = ({ employee, index }: { employee: Employee; index: number; key?: string }) => {
+const EmployeeCard = ({ employee, index, stats }: { employee: Employee; index: number; stats?: { top1: number; top3: number; total: number }; key?: string }) => {
   const getTrophyColor = (idx: number) => {
     switch (idx) {
       case 0: return "text-yellow-500"; // Gold
@@ -294,9 +295,17 @@ const EmployeeCard = ({ employee, index }: { employee: Employee; index: number; 
 
   return (
     <motion.div
+      layout
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.05 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      whileHover={{ scale: 1.02, transition: { duration: 0.2 } }}
+      whileTap={{ scale: 0.98 }}
+      transition={{ 
+        layout: { type: "spring", stiffness: 300, damping: 30 },
+        opacity: { duration: 0.2 },
+        y: { duration: 0.2, delay: index * 0.02 }
+      }}
       className={cn(
         "flex items-center gap-4 p-4 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-shadow relative overflow-hidden",
         index < 5 && "border-l-4",
@@ -319,7 +328,19 @@ const EmployeeCard = ({ employee, index }: { employee: Employee; index: number; 
           <h3 className="font-semibold text-gray-800 dark:text-gray-100">{employee.name}</h3>
           {trophyColor && <Trophy size={16} className={trophyColor} />}
         </div>
-        <p className="text-xs text-gray-400 dark:text-gray-500 uppercase tracking-wider font-medium">Posição #{index + 1}</p>
+        <div className="flex items-center gap-3">
+          <p className="text-xs text-gray-400 dark:text-gray-500 uppercase tracking-wider font-medium">Posição #{index + 1}</p>
+          {stats && stats.total > 0 && (
+            <div className="flex gap-2">
+              <span className="text-[10px] font-bold text-yellow-600 dark:text-yellow-500 flex items-center gap-0.5">
+                <Trophy size={10} /> {stats.top1}x 1º
+              </span>
+              <span className="text-[10px] font-bold text-blue-500 dark:text-blue-400 flex items-center gap-0.5">
+                <Trophy size={10} /> {stats.top3}x Top 3
+              </span>
+            </div>
+          )}
+        </div>
       </div>
       <div className={cn(
         "w-8 h-8 rounded-full flex items-center justify-center font-bold",
@@ -401,11 +422,11 @@ const Home = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [order, setOrder] = useState<string[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [history, setHistory] = useState<SortHistory[]>([]);
   const [lastSort, setLastSort] = useState<SortHistory | null>(null);
   const [error, setError] = useState<any>(null);
   const notifiedRef = useRef<string | null>(null);
-
-  if (error) throw error;
+  const [showFullRanking, setShowFullRanking] = useState(false);
 
   useEffect(() => {
     // Real-time listeners via local store subscriptions
@@ -414,12 +435,22 @@ const Home = () => {
     }, (err: any) => setError(err));
 
     const unsubscribeHistory = subscribeHistory((data) => {
+      setHistory(data);
       if (data.length > 0) {
         const latest = data[0];
         setLastSort(latest);
         
         // Show notification if it's a new sort
         if (notifiedRef.current && notifiedRef.current !== latest.id) {
+          // Fun celebratory effect
+          confetti({
+            particleCount: 150,
+            spread: 70,
+            origin: { y: 0.6 },
+            colors: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'],
+            zIndex: 100
+          });
+
           toast.success("Um novo sorteio foi realizado!", {
             description: "A fila do almoço foi atualizada.",
             icon: <RefreshCw className="text-emerald-500" size={16} />
@@ -450,7 +481,7 @@ const Home = () => {
       unsubscribeConfig();
       unsubscribeOrder();
     };
-  }, []);
+  }, [config?.logoUrl]);
 
   useEffect(() => {
     if (config?.title) {
@@ -484,8 +515,38 @@ const Home = () => {
 
     const interval = setInterval(check, 2000);
     return () => clearInterval(interval);
-  }, [config?.nextSortDate]);
+  }, [config, config?.nextSortDate]);
 
+  const rankingStats = useMemo(() => {
+    const stats: Record<string, { top1: number; top3: number; total: number }> = {};
+    
+    history.forEach(draw => {
+      draw.order.forEach((id, index) => {
+        if (!stats[id]) stats[id] = { top1: 0, top3: 0, total: 0 };
+        stats[id].total++;
+        if (index === 0) stats[id].top1++;
+        if (index < 3) stats[id].top3++;
+      });
+    });
+    
+    return stats;
+  }, [history]);
+
+  const historicalRanking = useMemo(() => {
+    return employees
+      .map(emp => ({
+        ...emp,
+        stats: rankingStats[emp.id] || { top1: 0, top3: 0, total: 0 }
+      }))
+      .sort((a, b) => {
+        // Sort by top1, then top3, then total draws
+        if (b.stats.top1 !== a.stats.top1) return b.stats.top1 - a.stats.top1;
+        if (b.stats.top3 !== a.stats.top3) return b.stats.top3 - a.stats.top3;
+        return b.stats.total - a.stats.total;
+      });
+  }, [employees, rankingStats]);
+
+  if (error) throw error;
   if (!config) return <div className="min-h-screen flex items-center justify-center dark:bg-gray-900 dark:text-white">Carregando...</div>;
 
   const sortedEmployees = order
@@ -623,18 +684,93 @@ const Home = () => {
 
           {sortedEmployees.length > 0 ? (
             <div className="grid gap-3">
-              <div className="flex items-center gap-2 mb-2">
-                <Trophy className="text-yellow-500" size={20} />
-                <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest">Ranking de Sorteio</h3>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Users className="text-blue-600 dark:text-blue-400" size={20} />
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest">Fila do Almoço</h3>
+                </div>
+                <span className="text-[10px] font-bold text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-lg uppercase">
+                  {sortedEmployees.length} Pessoas
+                </span>
               </div>
               {sortedEmployees.map((employee, idx) => (
-                <EmployeeCard key={employee.id} employee={employee} index={idx} />
+                <EmployeeCard 
+                  key={employee.id} 
+                  employee={employee} 
+                  index={idx} 
+                  stats={rankingStats[employee.id]}
+                />
               ))}
             </div>
           ) : (
             <div className="text-center py-12 text-gray-400">
               <p>Nenhum sorteio realizado ainda.</p>
               <p className="text-sm">Acesse o painel administrativo para iniciar.</p>
+            </div>
+          )}
+
+          {historicalRanking.some(emp => emp.stats.total > 0) && (
+            <div className="mt-12">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-2">
+                  <Trophy className="text-yellow-500" size={24} />
+                  <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">Ranking Geral</h2>
+                </div>
+                <button 
+                  onClick={() => setShowFullRanking(!showFullRanking)}
+                  className="text-sm font-bold text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  {showFullRanking ? "Ver Menos" : "Ver Todos"}
+                </button>
+              </div>
+              
+              <div className="grid gap-4">
+                {(showFullRanking ? historicalRanking : historicalRanking.slice(0, 3)).map((emp, idx) => (
+                  <motion.div
+                    key={emp.id}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: idx * 0.1 }}
+                    className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm flex items-center justify-between gap-4"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className={cn(
+                        "w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg",
+                        idx === 0 ? "bg-yellow-100 text-yellow-700" : 
+                        idx === 1 ? "bg-gray-100 text-gray-700" :
+                        idx === 2 ? "bg-amber-100 text-amber-700" :
+                        "bg-blue-50 text-blue-700"
+                      )}>
+                        {idx + 1}º
+                      </div>
+                      <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-gray-100 dark:border-gray-700">
+                        {emp.photo ? (
+                          <img src={emp.photo} alt={emp.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : (
+                          <div className="w-full h-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-500 font-bold">
+                            {emp.name.charAt(0)}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-gray-800 dark:text-gray-100">{emp.name}</h4>
+                        <p className="text-xs text-gray-400">Total de sorteios: {emp.stats.total}</p>
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-2">
+                      <div className="text-center px-3 py-1 bg-yellow-50 dark:bg-yellow-900/20 rounded-xl border border-yellow-100 dark:border-yellow-900/30">
+                        <p className="text-[10px] font-bold text-yellow-600 dark:text-yellow-400 uppercase">1º Lugar</p>
+                        <p className="text-sm font-black text-yellow-700 dark:text-yellow-300">{emp.stats.top1}</p>
+                      </div>
+                      <div className="text-center px-3 py-1 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-900/30">
+                        <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase">Top 3</p>
+                        <p className="text-sm font-black text-blue-700 dark:text-blue-300">{emp.stats.top3}</p>
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -825,6 +961,7 @@ const AdminPanel = () => {
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [editingAdmin, setEditingAdmin] = useState<AdminUser | null>(null);
+  const [isAddingAdmin, setIsAddingAdmin] = useState(false);
   const [admins, setAdmins] = useState<AdminUser[]>([]);
   const [error, setError] = useState<any>(null);
   
@@ -1133,6 +1270,7 @@ const AdminPanel = () => {
     await saveAdmin(adminData);
     setShowAdminModal(false);
     setEditingAdmin(null);
+    setIsAddingAdmin(false);
     setTempAdminPhoto("");
     toast.success((editingAdmin || !isAdmin?.canEditAdmins) ? "Perfil atualizado." : "Administrador adicionado.");
   };
@@ -1223,18 +1361,21 @@ const AdminPanel = () => {
                         <Download size={18} /> Baixar Banco de Dados
                       </button>
                       {isAdmin?.canEditAdmins && (
-                        <button onClick={() => { setShowAdminModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
-                          <UserIcon size={18} /> Gerenciar Administradores
-                        </button>
+                        <>
+                          <button onClick={() => { setShowAdminModal(true); setShowMenu(false); setIsAddingAdmin(false); setEditingAdmin(null); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium border-b border-gray-100 dark:border-gray-800">
+                            <Users size={18} /> Gerenciar Administradores
+                          </button>
+                          <button onClick={() => { setShowAdminModal(true); setShowMenu(false); setIsAddingAdmin(true); setEditingAdmin(null); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium border-b border-gray-100 dark:border-gray-800">
+                            <UserPlus size={18} /> Criar Administrador
+                          </button>
+                        </>
                       )}
+                      <button onClick={() => { setShowAdminModal(true); setShowMenu(false); setIsAddingAdmin(false); setEditingAdmin(isAdmin); setTempAdminPhoto(isAdmin.photo || ""); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
+                        <UserIcon size={18} /> Meu Perfil
+                      </button>
                       <button onClick={() => { setShowConfigModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
                         <Settings size={18} /> Personalizar App
                       </button>
-                      {!isAdmin?.canEditAdmins && (
-                        <button onClick={() => { setShowAdminModal(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors text-sm font-medium">
-                          <UserIcon size={18} /> Meu Perfil
-                        </button>
-                      )}
                       <button 
                         onClick={() => {
                           if (Notification.permission !== "granted") {
@@ -1770,7 +1911,7 @@ const AdminPanel = () => {
 
         {showAdminModal && (
           <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { setShowAdminModal(false); setEditingAdmin(null); setTempAdminPhoto(""); }} />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { setShowAdminModal(false); setEditingAdmin(null); setIsAddingAdmin(false); setTempAdminPhoto(""); }} />
             <motion.div 
               initial={{ opacity: 0, y: 100, scale: 1 }} 
               animate={{ opacity: 1, y: 0, scale: 1 }} 
@@ -1778,13 +1919,24 @@ const AdminPanel = () => {
               className="relative bg-white dark:bg-gray-900 w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden max-h-[95vh] flex flex-col"
             >
               <div className="p-4 md:p-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
-                <h2 className="text-lg md:text-xl font-bold text-gray-800 dark:text-gray-100">{editingAdmin ? "Editar Administrador" : "Gerenciar Administradores"}</h2>
-                <button onClick={() => { setShowAdminModal(false); setEditingAdmin(null); setTempAdminPhoto(""); }} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-gray-400 dark:text-gray-500"><X size={20} /></button>
+                <h2 className="text-lg md:text-xl font-bold text-gray-800 dark:text-gray-100">
+                  {editingAdmin ? "Editar Administrador" : (isAddingAdmin ? "Novo Administrador" : "Gerenciar Administradores")}
+                </h2>
+                <button onClick={() => { setShowAdminModal(false); setEditingAdmin(null); setIsAddingAdmin(false); setTempAdminPhoto(""); }} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-gray-400 dark:text-gray-500"><X size={20} /></button>
               </div>
               <div className="p-6 space-y-6 overflow-y-auto">
-                {isAdmin?.canEditAdmins && !editingAdmin && (
+                {isAdmin?.canEditAdmins && !editingAdmin && !isAddingAdmin && (
                   <div className="space-y-3">
-                    <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Administradores Atuais</p>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">Administradores Atuais</p>
+                      <button 
+                        onClick={() => setIsAddingAdmin(true)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm shadow-blue-200 dark:shadow-none"
+                      >
+                        <Plus size={14} />
+                        Novo
+                      </button>
+                    </div>
                     <div className="grid gap-2">
                       {admins.map(admin => (
                         <div key={admin.id} className="flex items-center justify-between p-3.5 bg-gray-50/50 dark:bg-gray-800/50 rounded-2xl border border-gray-100 dark:border-gray-700">
@@ -1821,10 +1973,10 @@ const AdminPanel = () => {
                   </div>
                 )}
 
-                {(!isAdmin?.canEditAdmins || editingAdmin) && (
+                {(isAddingAdmin || editingAdmin || !isAdmin?.canEditAdmins) && (
                   <form onSubmit={handleSaveAdmin} className="space-y-5 pt-2">
                     <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest ml-1">
-                      {editingAdmin ? "Dados do Administrador" : (isAdmin?.canEditAdmins ? "Adicionar Novo Admin" : "Meu Perfil")}
+                      {editingAdmin ? "Dados do Administrador" : (isAddingAdmin ? "Adicionar Novo Admin" : (!isAdmin?.canEditAdmins ? "Meu Perfil" : ""))}
                     </p>
                     
                     <div className="flex flex-col items-center gap-4 mb-6">
@@ -1907,20 +2059,20 @@ const AdminPanel = () => {
                         className="w-full bg-blue-600 text-white font-bold py-4 rounded-2xl shadow-xl shadow-blue-600/20 hover:bg-blue-700 transition-all active:scale-[0.98] text-sm md:text-base flex items-center justify-center gap-2"
                       >
                         {(editingAdmin || !isAdmin?.canEditAdmins) ? <RefreshCw size={18} /> : <UserPlus size={18} />}
-                        {(editingAdmin || !isAdmin?.canEditAdmins) ? "Salvar Alterações" : "Adicionar Administrador"}
+                        {editingAdmin ? "Salvar Alterações" : (isAddingAdmin ? "Criar Administrador" : (!isAdmin?.canEditAdmins ? "Salvar Alterações" : "Adicionar Administrador"))}
                       </button>
-                      {editingAdmin && isAdmin?.canEditAdmins && (
+                      {(editingAdmin || isAddingAdmin) && isAdmin?.canEditAdmins && (
                         <button 
                           type="button"
-                          onClick={() => { setEditingAdmin(null); setTempAdminPhoto(""); }}
+                          onClick={() => { setEditingAdmin(null); setIsAddingAdmin(false); setTempAdminPhoto(""); }}
                           className="w-full bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-bold py-4 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-all text-sm md:text-base"
                         >
-                          Cancelar Edição
+                          Voltar para Lista
                         </button>
                       )}
                       <button 
                         type="button"
-                        onClick={() => { setShowAdminModal(false); setEditingAdmin(null); setTempAdminPhoto(""); }}
+                        onClick={() => { setShowAdminModal(false); setEditingAdmin(null); setIsAddingAdmin(false); setTempAdminPhoto(""); }}
                         className="w-full bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-bold py-4 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-all text-sm md:text-base sm:hidden"
                       >
                         Fechar
